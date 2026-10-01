@@ -21,18 +21,19 @@ export interface LocalScreenshotItem {
    BACKEND URL
 ========================================================================== */
 
-const getBackendUrl = () => {
-  const configured = import.meta.env.VITE_BACKEND_URL?.trim();
+const getBackendUrl = (): string => {
+  const configured =
+    import.meta.env.VITE_BACKEND_URL?.trim();
 
   if (configured) {
     return configured.replace(/\/$/, '');
   }
 
   if (typeof window !== 'undefined') {
-    return `${window.location.protocol}//${window.location.hostname}:3001`;
+    return window.location.origin;
   }
 
-  return 'https://localhost:3001';
+  return '';
 };
 
 /* ========================================================================== 

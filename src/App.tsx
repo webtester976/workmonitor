@@ -1,5 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { AppUser, PendingSignup, ScreenshotLog, StorageSettings } from './types';
+
+import {
+  AppUser,
+  PendingSignup,
+  ScreenshotLog,
+  StorageSettings,
+} from './types';
 
 import {
   getStoredUsers,
@@ -295,23 +301,123 @@ export default function App() {
 
 
     const sessionUser =
-      getActiveSessionUser();
+  getActiveSessionUser();
+
+const adminToken =
+  localStorage.getItem(
+    'workmonitor_admin_token'
+  );
+
+const adminExpiresAt =
+  localStorage.getItem(
+    'workmonitor_admin_token_expires_at'
+  );
+
+const storedAdminJson =
+  localStorage.getItem(
+    'workmonitor_admin_user'
+  );
 
 
-    if (sessionUser) {
-      const freshUser =
-        loadedUsers.find(
-          (user) =>
-            user.id ===
-            sessionUser.id
-        ) ||
-        sessionUser;
+// ====================================================
+// RESTORE ADMIN SESSION
+// ====================================================
+
+if (
+  adminToken &&
+  adminExpiresAt &&
+  storedAdminJson
+) {
+
+  const expiresAt =
+    new Date(
+      adminExpiresAt
+    ).getTime();
 
 
-      setCurrentUser(
-        freshUser
+  if (
+    Number.isFinite(
+      expiresAt
+    ) &&
+    expiresAt >
+      Date.now()
+  ) {
+
+    try {
+
+      const storedAdmin =
+        JSON.parse(
+          storedAdminJson
+        ) as AppUser;
+
+
+      if (
+        storedAdmin?.id &&
+        storedAdmin?.role ===
+          'admin'
+      ) {
+
+        setCurrentUser(
+          storedAdmin
+        );
+
+
+        setActiveSessionUser(
+          storedAdmin
+        );
+
+      }
+
+    } catch (error) {
+
+      console.warn(
+        'Unable to restore admin session:',
+        error
       );
+
     }
+
+  } else {
+
+    localStorage.removeItem(
+      'workmonitor_admin_token'
+    );
+
+    localStorage.removeItem(
+      'workmonitor_admin_token_expires_at'
+    );
+
+    localStorage.removeItem(
+      'workmonitor_admin_user'
+    );
+
+  }
+
+}
+
+
+// ====================================================
+// RESTORE EMPLOYEE SESSION
+// ====================================================
+
+else if (
+  sessionUser
+) {
+
+  const freshUser =
+    loadedUsers.find(
+      (user) =>
+        user.id ===
+        sessionUser.id
+    ) ||
+    sessionUser;
+
+
+  setCurrentUser(
+    freshUser
+  );
+
+}
 
 
     void refreshCentralPeople();
@@ -343,7 +449,9 @@ export default function App() {
       );
     };
 
+
     // eslint-disable-next-line react-hooks/exhaustive-deps
+
   }, []);
 
 
@@ -352,9 +460,26 @@ export default function App() {
   ========================================================================== */
 
   const handleLogout = () => {
-    setActiveSessionUser(null);
 
-    setCurrentUser(null);
+    localStorage.removeItem(
+      'workmonitor_admin_token'
+    );
+
+    localStorage.removeItem(
+      'workmonitor_admin_token_expires_at'
+    );
+
+    localStorage.removeItem(
+      'workmonitor_admin_user'
+    );
+
+    setActiveSessionUser(
+      null
+    );
+
+    setCurrentUser(
+      null
+    );
   };
 
 
@@ -419,6 +544,7 @@ export default function App() {
     setStorageSettings(
       settings
     );
+
 
     saveStorageSettings(
       settings
@@ -668,7 +794,6 @@ export default function App() {
         {!currentUser ? (
 
           <AuthScreen
-
             allUsers={
               allUsers
             }
@@ -731,14 +856,12 @@ export default function App() {
             onAdminConfirmationDispatched={
               handleAdminCodeDispatched
             }
-
           />
 
         ) : currentUser.role ===
           'admin' ? (
 
           <AdminDashboard
-
             adminUser={
               currentUser
             }
@@ -754,6 +877,7 @@ export default function App() {
               setAllUsers(
                 users
               );
+
 
               saveStoredUsers(
                 users
@@ -777,6 +901,7 @@ export default function App() {
               setPendingSignups(
                 signups
               );
+
 
               savePendingSignups(
                 signups
@@ -812,13 +937,11 @@ export default function App() {
             onConnectDrive={
               () => {}
             }
-
           />
 
         ) : (
 
           <EmployeeDashboard
-
             currentUser={
               currentUser
             }
@@ -850,7 +973,6 @@ export default function App() {
             onLogout={
               handleLogout
             }
-
           />
 
         )}

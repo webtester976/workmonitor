@@ -51,28 +51,19 @@ import {
 // BACKEND
 // ======================================================
 
-const getBackendUrl = () => {
+const getBackendUrl = (): string => {
   const configured =
     import.meta.env.VITE_BACKEND_URL?.trim();
 
   if (configured) {
-    return configured.replace(
-      /\/$/,
-      ''
-    );
+    return configured.replace(/\/$/, '');
   }
 
-  if (
-    typeof window !==
-    'undefined'
-  ) {
-    return (
-      `${window.location.protocol}//` +
-      `${window.location.hostname}:3001`
-    );
+  if (typeof window !== 'undefined') {
+    return window.location.origin;
   }
 
-  return 'https://localhost:3001';
+  return '';
 };
 
 // ======================================================
@@ -713,7 +704,7 @@ export const EmployeeDashboard:
                 1
             );
           },
-          1000
+          60000
         );
     } else {
       if (
@@ -756,7 +747,7 @@ export const EmployeeDashboard:
         () => {
           void syncTrackerTime();
         },
-        10000
+        60000
       );
 
     return () =>
@@ -2271,10 +2262,6 @@ export const EmployeeDashboard:
 
       setIsPaused(
         false
-      );
-
-      setSessionSeconds(
-        0
       );
 
       scheduleRandomWindow(

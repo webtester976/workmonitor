@@ -166,7 +166,6 @@ const readApiJson = async (
 
     throw new Error(
       `Backend returned non-JSON response (${response.status}). ` +
-      `Please check node server.js / ngrok. ` +
       `${
         preview
           ? `Response: ${preview}`
@@ -218,8 +217,8 @@ React.FC<AdminDashboardProps> = ({
   const captureEditingRef =
     useRef(false);
 
-  const activityRequestRef = useRef(0);
-  const [adminScreenshotUrls, setAdminScreenshotUrls] = useState<Record<string, string>>({});
+  const activityRequestRef =
+    useRef(0);
 
 
   const [
@@ -284,11 +283,26 @@ React.FC<AdminDashboardProps> = ({
     useState<string>('');
 
 
-  const [selectedHistoryYear, setSelectedHistoryYear] =
-    useState<string>(new Date().getFullYear().toString());
+  const [
+    selectedHistoryYear,
+    setSelectedHistoryYear
+  ] =
+    useState<string>(
+      new Date()
+        .getFullYear()
+        .toString()
+    );
 
-  const [selectedHistoryMonth, setSelectedHistoryMonth] =
-    useState<string>(new Date().toISOString().slice(0, 7));
+
+  const [
+    selectedHistoryMonth,
+    setSelectedHistoryMonth
+  ] =
+    useState<string>(
+      new Date()
+        .toISOString()
+        .slice(0, 7)
+    );
 
 
   const [
@@ -429,7 +443,7 @@ React.FC<AdminDashboardProps> = ({
     window.setTimeout(
       () =>
         setMessage(''),
-      5000
+      30000
     );
   };
 
@@ -831,7 +845,7 @@ React.FC<AdminDashboardProps> = ({
           void refreshCentralData(
             true
           ),
-        5000
+        30000
       );
 
 
@@ -848,63 +862,260 @@ React.FC<AdminDashboardProps> = ({
      LOAD EMPLOYEE HISTORY
   ========================================================================== */
 
-  const loadEmployeeHistory = async (employeeId: string) => {
-    if (!employeeId) { setHistoryRows([]); setSelectedDate(''); setSelectedActivity(null); return; }
-    const requestId = ++activityRequestRef.current;
-    try {
-      const response = await apiFetch(`/api/activity-history/${encodeURIComponent(employeeId)}`, { method: 'GET', cache: 'no-store' });
-      const data = await readApiJson(response);
-      if (!response.ok || !data?.success) throw new Error(data?.error || 'Failed to load activity history');
-      if (requestId !== activityRequestRef.current) return;
-      const records: ActivityHistoryRow[] = Array.isArray(data.records) ? data.records : [];
-      setHistoryRows(records); setSelectedDate(''); setSelectedActivity(null);
-    } catch (err: any) { if (requestId === activityRequestRef.current) flash(`❌ ${err.message}`); }
-  };
+  const loadEmployeeHistory =
+    async (
+      employeeId: string
+    ) => {
 
-  const loadSelectedActivity = async (employeeId: string, dateKey: string) => {
-    if (!employeeId || !dateKey) { setSelectedActivity(null); return; }
-    const requestId = ++activityRequestRef.current; setSelectedActivity(null);
-    try {
-      const response = await apiFetch(`/api/activity/${encodeURIComponent(employeeId)}/${encodeURIComponent(dateKey)}`, { method: 'GET', cache: 'no-store' });
-      const data = await readApiJson(response);
-      if (!response.ok || !data?.success) throw new Error(data?.error || 'Failed to load selected date activity');
-      if (requestId !== activityRequestRef.current) return;
-      setSelectedActivity(data);
-    } catch (err: any) { if (requestId === activityRequestRef.current) flash(`❌ ${err.message}`); }
-  };
+      if (!employeeId) {
 
-  useEffect(() => {
-    activityRequestRef.current += 1; setHistoryRows([]); setSelectedDate(''); setSelectedActivity(null); setPreviewImage(null);
-    if (selectedEmployeeId) void loadEmployeeHistory(selectedEmployeeId);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEmployeeId]);
+        setHistoryRows([]);
 
-  useEffect(() => {
-    if (selectedEmployeeId && selectedDate) void loadSelectedActivity(selectedEmployeeId, selectedDate);
-    else setSelectedActivity(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedEmployeeId, selectedDate]);
+        setSelectedDate('');
 
-  useEffect(() => {
-    let cancelled = false;
-    const screenshots: ScreenshotItem[] = Array.isArray(selectedActivity?.screenshots) ? selectedActivity.screenshots : [];
-    setAdminScreenshotUrls(previous => { Object.values(previous).forEach(url => { if (url.startsWith('blob:')) URL.revokeObjectURL(url); }); return {}; });
-    if (!selectedEmployeeId || !selectedDate || !screenshots.length) return () => { cancelled = true; };
-    const loadImages = async () => {
-      const loaded: Record<string,string> = {};
-      for (const screenshot of screenshots) {
-        if (cancelled) break;
-        try {
-          const response = await fetch(screenshot.localUrl, { method:'GET', cache:'no-store', headers:{ 'ngrok-skip-browser-warning':'true' } });
-          if (!response.ok) throw new Error(`HTTP ${response.status}`);
-          const blob = await response.blob(); if (cancelled) return;
-          loaded[screenshot.localUrl] = URL.createObjectURL(blob);
-        } catch (error) { console.error('Admin screenshot load failed:', screenshot.fileName, error); }
+        setSelectedActivity(
+          null
+        );
+
+        return;
       }
-      if (!cancelled) setAdminScreenshotUrls(loaded); else Object.values(loaded).forEach(URL.revokeObjectURL);
+
+
+      const requestId =
+        ++activityRequestRef.current;
+
+
+      try {
+
+        const response =
+          await apiFetch(
+            `/api/activity-history/${encodeURIComponent(
+              employeeId
+            )}`,
+            {
+              method: 'GET',
+              cache: 'no-store',
+            }
+          );
+
+
+        const data =
+          await readApiJson(
+            response
+          );
+
+
+        if (
+          !response.ok ||
+          !data?.success
+        ) {
+
+          throw new Error(
+            data?.error ||
+            'Failed to load activity history'
+          );
+        }
+
+
+        if (
+          requestId !==
+          activityRequestRef.current
+        ) {
+          return;
+        }
+
+
+        const records:
+          ActivityHistoryRow[] =
+          Array.isArray(
+            data.records
+          )
+            ? data.records
+            : [];
+
+
+        setHistoryRows(
+          records
+        );
+
+
+        setSelectedDate(
+          ''
+        );
+
+
+        setSelectedActivity(
+          null
+        );
+
+      } catch (err: any) {
+
+        if (
+          requestId ===
+          activityRequestRef.current
+        ) {
+
+          flash(
+            `❌ ${err.message}`
+          );
+        }
+
+      }
     };
-    void loadImages(); return () => { cancelled = true; };
-  }, [selectedActivity, selectedEmployeeId, selectedDate]);
+
+
+  /* ==========================================================================
+     LOAD SELECTED ACTIVITY
+  ========================================================================== */
+
+  const loadSelectedActivity =
+    async (
+      employeeId: string,
+      dateKey: string
+    ) => {
+
+      if (
+        !employeeId ||
+        !dateKey
+      ) {
+
+        setSelectedActivity(
+          null
+        );
+
+        return;
+      }
+
+
+      const requestId =
+        ++activityRequestRef.current;
+
+
+      setSelectedActivity(
+        null
+      );
+
+
+      try {
+
+        const response =
+          await apiFetch(
+            `/api/activity/${encodeURIComponent(
+              employeeId
+            )}/${encodeURIComponent(
+              dateKey
+            )}`,
+            {
+              method: 'GET',
+              cache: 'no-store',
+            }
+          );
+
+
+        const data =
+          await readApiJson(
+            response
+          );
+
+
+        if (
+          !response.ok ||
+          !data?.success
+        ) {
+
+          throw new Error(
+            data?.error ||
+            'Failed to load selected date activity'
+          );
+        }
+
+
+        if (
+          requestId !==
+          activityRequestRef.current
+        ) {
+          return;
+        }
+
+
+        setSelectedActivity(
+          data
+        );
+
+      } catch (err: any) {
+
+        if (
+          requestId ===
+          activityRequestRef.current
+        ) {
+
+          flash(
+            `❌ ${err.message}`
+          );
+        }
+
+      }
+    };
+
+
+  useEffect(() => {
+
+    activityRequestRef.current +=
+      1;
+
+    setHistoryRows([]);
+
+    setSelectedDate('');
+
+    setSelectedActivity(
+      null
+    );
+
+    setPreviewImage(
+      null
+    );
+
+
+    if (
+      selectedEmployeeId
+    ) {
+
+      void loadEmployeeHistory(
+        selectedEmployeeId
+      );
+    }
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedEmployeeId,
+  ]);
+
+
+  useEffect(() => {
+
+    if (
+      selectedEmployeeId &&
+      selectedDate
+    ) {
+
+      void loadSelectedActivity(
+        selectedEmployeeId,
+        selectedDate
+      );
+
+    } else {
+
+      setSelectedActivity(
+        null
+      );
+    }
+
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    selectedEmployeeId,
+    selectedDate,
+  ]);
+
 
   /* ==========================================================================
      APPROVE SIGNUP
@@ -1091,7 +1302,7 @@ React.FC<AdminDashboardProps> = ({
 
 
         flash(
-          `✅ ${employee.name} deleted. Existing screenshots were kept.`
+          `✅ ${employee.name} deleted.`
         );
 
 
@@ -1105,6 +1316,10 @@ React.FC<AdminDashboardProps> = ({
           setHistoryRows([]);
 
           setSelectedActivity(
+            null
+          );
+
+          setPreviewImage(
             null
           );
         }
@@ -1332,74 +1547,180 @@ React.FC<AdminDashboardProps> = ({
      ACTIVITY HISTORY FILTERS
   ========================================================================== */
 
-  const availableHistoryYears: string[] =
+  const availableHistoryYears:
+    string[] =
     Array.from(
       new Set(
         historyRows
-          .map((row) => row.dateKey?.slice(0, 4))
-          .filter((year): year is string => Boolean(year))
+          .map(
+            (row) =>
+              row.dateKey
+                ?.slice(
+                  0,
+                  4
+                )
+          )
+          .filter(
+            (
+              year
+            ): year is string =>
+              Boolean(
+                year
+              )
+          )
       )
-    ).sort((a, b) => b.localeCompare(a));
+    )
+      .sort(
+        (
+          a,
+          b
+        ) =>
+          b.localeCompare(
+            a
+          )
+      );
 
 
   const effectiveHistoryYear =
     selectedHistoryYear &&
-    availableHistoryYears.includes(selectedHistoryYear)
+    availableHistoryYears.includes(
+      selectedHistoryYear
+    )
       ? selectedHistoryYear
-      : availableHistoryYears[0] || '';
+      : availableHistoryYears[0] ||
+        '';
 
 
-  const availableHistoryMonths: string[] =
+  const availableHistoryMonths:
+    string[] =
     effectiveHistoryYear
+
       ? Array.from(
           new Set(
             historyRows
-              .filter((row) =>
-                row.dateKey?.startsWith(`${effectiveHistoryYear}-`)
+
+              .filter(
+                (
+                  row
+                ) =>
+                  row.dateKey
+                    ?.startsWith(
+                      `${effectiveHistoryYear}-`
+                    )
               )
-              .map((row) => row.dateKey.slice(0, 7))
+
+              .map(
+                (
+                  row
+                ) =>
+                  row.dateKey.slice(
+                    0,
+                    7
+                  )
+              )
           )
-        ).sort((a, b) => b.localeCompare(a))
+        )
+          .sort(
+            (
+              a,
+              b
+            ) =>
+              b.localeCompare(
+                a
+              )
+          )
+
       : [];
 
 
   const effectiveHistoryMonth =
     selectedHistoryMonth &&
-    availableHistoryMonths.includes(selectedHistoryMonth)
+    availableHistoryMonths.includes(
+      selectedHistoryMonth
+    )
+
       ? selectedHistoryMonth
-      : availableHistoryMonths[0] || '';
+
+      : availableHistoryMonths[0] ||
+        '';
 
 
-  const filteredActivityDates: ActivityHistoryRow[] =
+  const filteredActivityDates:
+    ActivityHistoryRow[] =
     effectiveHistoryMonth
+
       ? historyRows
-          .filter((row) =>
-            row.dateKey?.startsWith(`${effectiveHistoryMonth}-`)
+
+          .filter(
+            (
+              row
+            ) =>
+              row.dateKey
+                ?.startsWith(
+                  `${effectiveHistoryMonth}-`
+                )
           )
-          .sort((a, b) => b.dateKey.localeCompare(a.dateKey))
+
+          .sort(
+            (
+              a,
+              b
+            ) =>
+              b.dateKey.localeCompare(
+                a.dateKey
+              )
+          )
+
       : [];
 
 
-  const getHistoryMonthLabel = (monthKey: string) => {
-    const [year, month] = monthKey.split('-');
-    const monthNumber = Number(month);
+  const getHistoryMonthLabel =
+    (
+      monthValue: string
+    ) => {
 
-    if (!year || !monthNumber) {
-      return monthKey;
-    }
+      const [
+        year,
+        month,
+      ] =
+        monthValue.split(
+          '-'
+        );
 
-    return new Date(
-      Number(year),
-      monthNumber - 1,
-      1
-    ).toLocaleDateString(
-      undefined,
-      {
-        month: 'long',
-        year: 'numeric',
+
+      const monthNumber =
+        Number(
+          month
+        );
+
+
+      if (
+        !year ||
+        !monthNumber
+      ) {
+
+        return monthValue;
       }
-    );
-  };
+
+
+      return new Date(
+        Number(
+          year
+        ),
+        monthNumber - 1,
+        1
+      )
+        .toLocaleDateString(
+          undefined,
+          {
+            month:
+              'long',
+
+            year:
+              'numeric',
+          }
+        );
+    };
 
 
   /* ==========================================================================
@@ -1725,7 +2046,17 @@ React.FC<AdminDashboardProps> = ({
                         ">
                           {emp.email}
                         </div>
+                        <div className="
+                            text-xs
+                            text-slate-500
+                            mt-1
+                          ">
+                            <span className="font-semibold">
+                              Password:
+                            </span>{' '}
 
+                            {emp.password || '-'}
+                          </div>
                       </td>
 
 
@@ -1775,15 +2106,41 @@ React.FC<AdminDashboardProps> = ({
 
                           <button
                             onClick={() => {
-                              activityRequestRef.current += 1;
-                              setHistoryRows([]);
-                              setSelectedDate('');
-                              setSelectedActivity(null);
-                              setPreviewImage(null);
-                              setSelectedHistoryYear('');
-                              setSelectedHistoryMonth('');
-                              setSelectedEmployeeId(emp.id);
-                              setActiveTab('activity');
+
+                              activityRequestRef.current +=
+                                1;
+
+                              setHistoryRows(
+                                []
+                              );
+
+                              setSelectedDate(
+                                ''
+                              );
+
+                              setSelectedActivity(
+                                null
+                              );
+
+                              setPreviewImage(
+                                null
+                              );
+
+                              setSelectedHistoryYear(
+                                ''
+                              );
+
+                              setSelectedHistoryMonth(
+                                ''
+                              );
+
+                              setSelectedEmployeeId(
+                                emp.id
+                              );
+
+                              setActiveTab(
+                                'activity'
+                              );
                             }}
                             className="
                               px-3
@@ -1835,6 +2192,7 @@ React.FC<AdminDashboardProps> = ({
                       </td>
 
                     </tr>
+
                   );
                 }
               )}
@@ -2068,199 +2426,490 @@ React.FC<AdminDashboardProps> = ({
                 border-slate-200
                 dark:border-slate-800
               ">
-                <div className="flex items-center gap-2 font-bold">
-                  <Calendar className="w-4 h-4" />
+
+                <div className="
+                  flex
+                  items-center
+                  gap-2
+                  font-bold
+                ">
+
+                  <Calendar className="
+                    w-4
+                    h-4
+                  " />
+
                   Activity History
+
                 </div>
+
               </div>
 
-              <div className="p-4 space-y-4">
+
+              <div className="
+                p-4
+                space-y-4
+              ">
 
                 <div>
-                  <label className="text-[11px] font-bold text-slate-500 uppercase">
+
+                  <label className="
+                    text-[11px]
+                    font-bold
+                    text-slate-500
+                    uppercase
+                  ">
                     Employee
                   </label>
 
+
                   <select
-                    value={selectedEmployeeId}
+                    value={
+                      selectedEmployeeId
+                    }
                     onChange={(e) => {
-                      activityRequestRef.current += 1;
-                      setHistoryRows([]);
-                      setSelectedDate('');
-                      setSelectedActivity(null);
-                      setPreviewImage(null);
-                      setSelectedHistoryYear('');
-                      setSelectedHistoryMonth('');
-                      setSelectedEmployeeId(e.target.value);
+
+                      activityRequestRef.current +=
+                        1;
+
+                      setHistoryRows(
+                        []
+                      );
+
+                      setSelectedDate(
+                        ''
+                      );
+
+                      setSelectedActivity(
+                        null
+                      );
+
+                      setPreviewImage(
+                        null
+                      );
+
+                      setSelectedHistoryYear(
+                        ''
+                      );
+
+                      setSelectedHistoryMonth(
+                        ''
+                      );
+
+                      setSelectedEmployeeId(
+                        e.target.value
+                      );
                     }}
                     className="
-                      mt-1 w-full border border-slate-300
-                      dark:border-slate-700 bg-white dark:bg-slate-800
-                      rounded-xl px-3 py-2.5 text-sm
+                      mt-1
+                      w-full
+                      border
+                      border-slate-300
+                      dark:border-slate-700
+                      bg-white
+                      dark:bg-slate-800
+                      rounded-xl
+                      px-3
+                      py-2.5
+                      text-sm
                     "
                   >
-                    <option value="">Select employee</option>
 
-                    {centralUsers.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.name} — {emp.email}
+                    <option value="">
+                      Select employee
+                    </option>
+
+                    {centralUsers.map(
+                      (
+                        emp
+                      ) => (
+
+                      <option
+                        key={emp.id}
+                        value={emp.id}
+                      >
+                        {emp.name}
+                        {' — '}
+                        {emp.email}
                       </option>
+
                     ))}
+
                   </select>
+
                 </div>
 
+
                 <div>
-                  <label className="text-[11px] font-bold text-slate-500 uppercase">
+
+                  <label className="
+                    text-[11px]
+                    font-bold
+                    text-slate-500
+                    uppercase
+                  ">
                     Year
                   </label>
 
-                  <select
-                    value={effectiveHistoryYear}
-                    disabled={!selectedEmployeeId || !availableHistoryYears.length}
-                    onChange={(e) => {
-                      const year = e.target.value;
 
-                      setSelectedHistoryYear(year);
+                  <select
+                    value={
+                      effectiveHistoryYear
+                    }
+                    disabled={
+                      !selectedEmployeeId ||
+                      !availableHistoryYears.length
+                    }
+                    onChange={(e) => {
+
+                      const year =
+                        e.target.value;
+
+
+                      setSelectedHistoryYear(
+                        year
+                      );
+
 
                       const firstMonth =
                         Array.from(
                           new Set(
                             historyRows
-                              .filter((row) =>
-                                row.dateKey.startsWith(`${year}-`)
+
+                              .filter(
+                                (
+                                  row
+                                ) =>
+                                  row.dateKey
+                                    .startsWith(
+                                      `${year}-`
+                                    )
                               )
-                              .map((row) =>
-                                row.dateKey.slice(0, 7)
+
+                              .map(
+                                (
+                                  row
+                                ) =>
+                                  row.dateKey.slice(
+                                    0,
+                                    7
+                                  )
                               )
                           )
                         )
-                          .sort((a, b) => b.localeCompare(a))[0] || '';
+                          .sort(
+                            (
+                              a,
+                              b
+                            ) =>
+                              b.localeCompare(
+                                a
+                              )
+                          )[0] ||
+                        '';
 
-                      setSelectedHistoryMonth(firstMonth);
-                      setSelectedDate('');
-                      setSelectedActivity(null);
-                      setPreviewImage(null);
+
+                      setSelectedHistoryMonth(
+                        firstMonth
+                      );
+
+                      setSelectedDate(
+                        ''
+                      );
+
+                      setSelectedActivity(
+                        null
+                      );
+
+                      setPreviewImage(
+                        null
+                      );
                     }}
                     className="
-                      mt-1 w-full border border-slate-300
-                      dark:border-slate-700 bg-white dark:bg-slate-800
-                      rounded-xl px-3 py-2.5 text-sm disabled:opacity-50
+                      mt-1
+                      w-full
+                      border
+                      border-slate-300
+                      dark:border-slate-700
+                      bg-white
+                      dark:bg-slate-800
+                      rounded-xl
+                      px-3
+                      py-2.5
+                      text-sm
+                      disabled:opacity-50
                     "
                   >
+
                     {!availableHistoryYears.length && (
-                      <option value="">No year available</option>
+
+                      <option value="">
+                        No year available
+                      </option>
+
                     )}
 
-                    {availableHistoryYears.map((year) => (
-                      <option key={year} value={year}>
+
+                    {availableHistoryYears.map(
+                      (
+                        year
+                      ) => (
+
+                      <option
+                        key={year}
+                        value={year}
+                      >
                         {year}
                       </option>
+
                     ))}
+
                   </select>
+
                 </div>
 
+
                 <div>
-                  <label className="text-[11px] font-bold text-slate-500 uppercase">
+
+                  <label className="
+                    text-[11px]
+                    font-bold
+                    text-slate-500
+                    uppercase
+                  ">
                     Month
                   </label>
 
+
                   <select
-                    value={effectiveHistoryMonth}
-                    disabled={!effectiveHistoryYear || !availableHistoryMonths.length}
+                    value={
+                      effectiveHistoryMonth
+                    }
+                    disabled={
+                      !effectiveHistoryYear ||
+                      !availableHistoryMonths.length
+                    }
                     onChange={(e) => {
-                      setSelectedHistoryMonth(e.target.value);
-                      setSelectedDate('');
-                      setSelectedActivity(null);
-                      setPreviewImage(null);
+
+                      setSelectedHistoryMonth(
+                        e.target.value
+                      );
+
+                      setSelectedDate(
+                        ''
+                      );
+
+                      setSelectedActivity(
+                        null
+                      );
+
+                      setPreviewImage(
+                        null
+                      );
                     }}
                     className="
-                      mt-1 w-full border border-slate-300
-                      dark:border-slate-700 bg-white dark:bg-slate-800
-                      rounded-xl px-3 py-2.5 text-sm disabled:opacity-50
+                      mt-1
+                      w-full
+                      border
+                      border-slate-300
+                      dark:border-slate-700
+                      bg-white
+                      dark:bg-slate-800
+                      rounded-xl
+                      px-3
+                      py-2.5
+                      text-sm
+                      disabled:opacity-50
                     "
                   >
+
                     {!availableHistoryMonths.length && (
-                      <option value="">No month available</option>
+
+                      <option value="">
+                        No month available
+                      </option>
+
                     )}
 
-                    {availableHistoryMonths.map((month) => (
-                      <option key={month} value={month}>
-                        {getHistoryMonthLabel(month)}
+
+                    {availableHistoryMonths.map(
+                      (
+                        currentMonth
+                      ) => (
+
+                      <option
+                        key={
+                          currentMonth
+                        }
+                        value={
+                          currentMonth
+                        }
+                      >
+                        {getHistoryMonthLabel(
+                          currentMonth
+                        )}
                       </option>
+
                     ))}
+
                   </select>
+
                 </div>
 
               </div>
 
-              <div className="border-t border-slate-200 dark:border-slate-800">
+
+              <div className="
+                border-t
+                border-slate-200
+                dark:border-slate-800
+              ">
 
                 <div className="
-                  px-4 py-3 text-[11px] uppercase
-                  font-bold text-slate-500
+                  px-4
+                  py-3
+                  text-[11px]
+                  uppercase
+                  font-bold
+                  text-slate-500
                 ">
                   Dates
                 </div>
 
+
                 <div className="
-                  max-h-[560px] overflow-y-auto
-                  divide-y divide-slate-100 dark:divide-slate-800
+                  max-h-[560px]
+                  overflow-y-auto
+                  divide-y
+                  divide-slate-100
+                  dark:divide-slate-800
                 ">
 
-                  {filteredActivityDates.map((row) => (
+                  {filteredActivityDates.map(
+                    (
+                      row
+                    ) => (
+
                     <button
-                      key={row.dateKey}
+                      key={
+                        row.dateKey
+                      }
                       type="button"
                       onClick={() => {
-                        activityRequestRef.current += 1;
-                        setSelectedActivity(null);
-                        setPreviewImage(null);
-                        setSelectedDate(row.dateKey);
+
+                        activityRequestRef.current +=
+                          1;
+
+                        setSelectedActivity(
+                          null
+                        );
+
+                        setPreviewImage(
+                          null
+                        );
+
+                        setSelectedDate(
+                          row.dateKey
+                        );
                       }}
                       className={`
-                        w-full text-left p-4 transition
+                        w-full
+                        text-left
+                        p-4
+                        transition
+
                         ${
-                          selectedDate === row.dateKey
+                          selectedDate ===
+                          row.dateKey
+
                             ? 'bg-indigo-50 dark:bg-indigo-950/40'
+
                             : 'hover:bg-slate-50 dark:hover:bg-slate-800/70'
                         }
                       `}
                     >
-                      <div className="font-bold text-sm">
+
+                      <div className="
+                        font-bold
+                        text-sm
+                      ">
+
                         {new Date(
                           `${row.dateKey}T00:00:00`
-                        ).toLocaleDateString(
-                          undefined,
-                          {
-                            day: '2-digit',
-                            month: 'short',
-                            year: 'numeric',
-                          }
-                        )}
+                        )
+                          .toLocaleDateString(
+                            undefined,
+                            {
+                              day:
+                                '2-digit',
+
+                              month:
+                                'short',
+
+                              year:
+                                'numeric',
+                            }
+                          )}
+
                       </div>
 
-                      <div className="text-[11px] text-slate-500 mt-1">
-                        {formatSeconds(row.totalSeconds)}
+
+                      <div className="
+                        text-[11px]
+                        text-slate-500
+                        mt-1
+                      ">
+
+                        {formatSeconds(
+                          row.totalSeconds
+                        )}
+
                         {' • '}
+
                         {row.screenshotCount}
+
                         {' screenshot'}
-                        {row.screenshotCount === 1 ? '' : 's'}
+
+                        {row.screenshotCount ===
+                        1
+                          ? ''
+                          : 's'}
+
                       </div>
+
                     </button>
+
                   ))}
+
 
                   {selectedEmployeeId &&
                     effectiveHistoryMonth &&
-                    filteredActivityDates.length === 0 && (
-                    <div className="p-6 text-center text-xs text-slate-500">
+                    filteredActivityDates.length ===
+                      0 && (
+
+                    <div className="
+                      p-6
+                      text-center
+                      text-xs
+                      text-slate-500
+                    ">
                       No activity found for this month.
                     </div>
+
                   )}
 
+
                   {!selectedEmployeeId && (
-                    <div className="p-6 text-center text-xs text-slate-500">
+
+                    <div className="
+                      p-6
+                      text-center
+                      text-xs
+                      text-slate-500
+                    ">
                       Select an employee first.
                     </div>
+
                   )}
 
                 </div>
@@ -2272,139 +2921,304 @@ React.FC<AdminDashboardProps> = ({
 
             {/* RIGHT 75% */}
 
-            <div className="space-y-4 min-w-0">
+            <div className="
+              space-y-4
+              min-w-0
+            ">
 
               <div className="
-                grid grid-cols-1 sm:grid-cols-3 gap-4
+                grid
+                grid-cols-1
+                sm:grid-cols-3
+                gap-4
               ">
 
                 <div className="
-                  p-5 bg-white dark:bg-slate-900 border
-                  border-slate-200 dark:border-slate-800 rounded-2xl
+                  p-5
+                  bg-white
+                  dark:bg-slate-900
+                  border
+                  border-slate-200
+                  dark:border-slate-800
+                  rounded-2xl
                 ">
-                  <div className="text-xs text-slate-500">
+
+                  <div className="
+                    text-xs
+                    text-slate-500
+                  ">
                     Selected Date
                   </div>
 
-                  <div className="text-base font-black mt-1">
-                    {selectedDate || 'Select a date'}
+                  <div className="
+                    text-base
+                    font-black
+                    mt-1
+                  ">
+                    {selectedDate ||
+                      'Select a date'}
                   </div>
+
                 </div>
 
+
                 <div className="
-                  p-5 bg-white dark:bg-slate-900 border
-                  border-slate-200 dark:border-slate-800 rounded-2xl
+                  p-5
+                  bg-white
+                  dark:bg-slate-900
+                  border
+                  border-slate-200
+                  dark:border-slate-800
+                  rounded-2xl
                 ">
-                  <div className="text-xs text-slate-500">
+
+                  <div className="
+                    text-xs
+                    text-slate-500
+                  ">
                     Tracked Time
                   </div>
 
-                  <div className="text-xl font-black mt-1">
-                    {formatSeconds(selectedActivity?.totalSeconds || 0)}
+                  <div className="
+                    text-xl
+                    font-black
+                    mt-1
+                  ">
+                    {formatSeconds(
+                      selectedActivity
+                        ?.totalSeconds ||
+                      0
+                    )}
                   </div>
+
                 </div>
 
+
                 <div className="
-                  p-5 bg-white dark:bg-slate-900 border
-                  border-slate-200 dark:border-slate-800 rounded-2xl
+                  p-5
+                  bg-white
+                  dark:bg-slate-900
+                  border
+                  border-slate-200
+                  dark:border-slate-800
+                  rounded-2xl
                 ">
-                  <div className="text-xs text-slate-500">
+
+                  <div className="
+                    text-xs
+                    text-slate-500
+                  ">
                     Screenshots
                   </div>
 
-                  <div className="text-xl font-black mt-1 text-indigo-600">
-                    {selectedActivity?.screenshotCount || 0}
+                  <div className="
+                    text-xl
+                    font-black
+                    mt-1
+                    text-indigo-600
+                  ">
+                    {selectedActivity
+                      ?.screenshotCount ||
+                      0}
                   </div>
+
                 </div>
 
               </div>
 
+
               <div className="
-                bg-white dark:bg-slate-900 border
-                border-slate-200 dark:border-slate-800
-                rounded-2xl overflow-hidden min-h-[560px]
+                bg-white
+                dark:bg-slate-900
+                border
+                border-slate-200
+                dark:border-slate-800
+                rounded-2xl
+                overflow-hidden
+                min-h-[560px]
               ">
 
                 <div className="
-                  p-4 border-b border-slate-200 dark:border-slate-800
-                  flex items-center justify-between gap-3
+                  p-4
+                  border-b
+                  border-slate-200
+                  dark:border-slate-800
+                  flex
+                  items-center
+                  justify-between
+                  gap-3
                 ">
+
                   <div>
-                    <div className="font-bold text-sm">
+
+                    <div className="
+                      font-bold
+                      text-sm
+                    ">
                       Screenshots
                     </div>
 
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      {selectedEmployee?.name || 'Select employee'}
+
+                    <div className="
+                      text-[11px]
+                      text-slate-500
+                      mt-0.5
+                    ">
+
+                      {selectedEmployee
+                        ?.name ||
+                        'Select employee'}
+
                       {' • '}
-                      {selectedDate || 'Select date'}
+
+                      {selectedDate ||
+                        'Select date'}
+
                     </div>
+
                   </div>
 
-                  <div className="text-xs font-bold text-indigo-600">
-                    {selectedActivity?.screenshotCount || 0} captures
+
+                  <div className="
+                    text-xs
+                    font-bold
+                    text-indigo-600
+                  ">
+                    {selectedActivity
+                      ?.screenshotCount ||
+                      0}{' '}
+                    captures
                   </div>
+
                 </div>
+
 
                 <div className="p-4">
 
-                  {selectedActivity?.screenshots?.length ? (
+                  {selectedActivity
+                    ?.screenshots
+                    ?.length ? (
 
                     <div className="
-                      grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4
+                      grid
+                      grid-cols-1
+                      md:grid-cols-2
+                      xl:grid-cols-3
+                      gap-4
                     ">
-                      {selectedActivity.screenshots.map(
-                        (screen: ScreenshotItem) => (
+
+                      {selectedActivity
+                        .screenshots
+                        .map(
+                          (
+                            screen:
+                              ScreenshotItem
+                          ) => (
 
                         <button
-                          key={screen.localUrl}
+                          key={
+                            screen.id ||
+                            screen.localUrl
+                          }
                           type="button"
-                          onClick={() => setPreviewImage(screen)}
+                          onClick={() =>
+                            setPreviewImage(
+                              screen
+                            )
+                          }
                           className="
-                            text-left rounded-xl overflow-hidden border
-                            border-slate-200 dark:border-slate-800
-                            hover:border-indigo-400 bg-slate-950
+                            text-left
+                            rounded-xl
+                            overflow-hidden
+                            border
+                            border-slate-200
+                            dark:border-slate-800
+                            hover:border-indigo-400
+                            bg-slate-950
                           "
                         >
-                          {adminScreenshotUrls[screen.localUrl] ? (
-                            <img
-                              src={adminScreenshotUrls[screen.localUrl]}
-                              alt={screen.fileName}
-                              className="w-full aspect-video object-cover"
-                            />
-                          ) : (
-                            <div className="
-                              w-full aspect-video flex items-center
-                              justify-center text-xs text-slate-400
-                            ">
-                              Loading screenshot...
-                            </div>
-                          )}
+
+                          <img
+                            src={
+                              screen.localUrl
+                            }
+                            alt={
+                              screen.fileName
+                            }
+                            loading="lazy"
+                            className="
+                              w-full
+                              aspect-video
+                              object-cover
+                            "
+                            onError={(
+                              event
+                            ) => {
+
+                              console.error(
+                                'Screenshot image failed:',
+                                screen.fileName,
+                                screen.localUrl
+                              );
+
+                              event
+                                .currentTarget
+                                .style
+                                .display =
+                                'none';
+                            }}
+                          />
+
 
                           <div className="
-                            p-2 bg-white dark:bg-slate-900
-                            text-[11px] truncate
+                            p-2
+                            bg-white
+                            dark:bg-slate-900
+                            text-[11px]
+                            truncate
                           ">
                             {screen.fileName}
                           </div>
+
                         </button>
 
                       ))}
+
                     </div>
 
                   ) : (
 
                     <div className="
-                      min-h-[470px] flex flex-col items-center
-                      justify-center text-center text-slate-500
+                      min-h-[470px]
+                      flex
+                      flex-col
+                      items-center
+                      justify-center
+                      text-center
+                      text-slate-500
                     ">
-                      <FileImage className="w-9 h-9 mb-3" />
 
-                      <div className="text-sm font-semibold">
+                      <FileImage className="
+                        w-9
+                        h-9
+                        mb-3
+                      " />
+
+
+                      <div className="
+                        text-sm
+                        font-semibold
+                      ">
+
                         {selectedDate
+
                           ? 'No screenshots for this date'
-                          : 'Select a date to view screenshots'}
+
+                          : 'Select a date to view screenshots'
+                        }
+
                       </div>
+
                     </div>
 
                   )}
@@ -2490,58 +3304,98 @@ React.FC<AdminDashboardProps> = ({
 
               {[
                 {
-                  id: '10s-1',
+                  id:
+                    '10s-1',
+
                   label:
                     '10 sec / 1 SS',
-                  window: 10,
-                  shots: 1,
+
+                  window:
+                    10,
+
+                  shots:
+                    1,
                 },
 
                 {
-                  id: '1m-3',
+                  id:
+                    '1m-3',
+
                   label:
                     '1 min / 3 SS',
-                  window: 60,
-                  shots: 3,
+
+                  window:
+                    60,
+
+                  shots:
+                    3,
                 },
 
                 {
-                  id: '2m-3',
+                  id:
+                    '2m-3',
+
                   label:
                     '2 min / 3 SS',
-                  window: 120,
-                  shots: 3,
+
+                  window:
+                    120,
+
+                  shots:
+                    3,
                 },
 
                 {
-                  id: '5m-5',
+                  id:
+                    '5m-5',
+
                   label:
                     '5 min / 5 SS',
-                  window: 300,
-                  shots: 5,
+
+                  window:
+                    300,
+
+                  shots:
+                    5,
                 },
 
                 {
-                  id: '10m-5',
+                  id:
+                    '10m-5',
+
                   label:
                     '10 min / 5 SS',
-                  window: 600,
-                  shots: 5,
+
+                  window:
+                    600,
+
+                  shots:
+                    5,
                 },
 
                 {
-                  id: '15m-5',
+                  id:
+                    '15m-5',
+
                   label:
                     '15 min / 5 SS',
-                  window: 900,
-                  shots: 5,
+
+                  window:
+                    900,
+
+                  shots:
+                    5,
                 },
 
               ].map(
-                (opt) => (
+                (
+                  opt
+                ) => (
 
                 <button
-                  key={opt.id}
+                  key={
+                    opt.id
+                  }
                   type="button"
                   onClick={() =>
                     applyPreset(
@@ -2679,8 +3533,7 @@ React.FC<AdminDashboardProps> = ({
                     uppercase
                     text-slate-500
                   ">
-                    Screenshots in
-                    duration
+                    Screenshots
                   </span>
 
 
@@ -2729,92 +3582,89 @@ React.FC<AdminDashboardProps> = ({
                 onClick={
                   applyCustomPolicy
                 }
-                className={`
+                className="
                   px-4
                   py-2
                   rounded-lg
-                  border
+                  bg-indigo-600
+                  hover:bg-indigo-500
+                  text-white
                   text-xs
                   font-bold
-
-                  ${
-                    presetId ===
-                    'custom'
-
-                      ? 'border-indigo-600 bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300'
-
-                      : 'border-slate-300 dark:border-slate-700'
-                  }
-                `}
+                "
               >
-                Use Custom Policy
+                Apply Custom
               </button>
 
             </div>
 
+          </div>
 
-            {/* CURRENT POLICY */}
+
+          <div className="
+            grid
+            md:grid-cols-2
+            gap-4
+          ">
 
             <div className="
               rounded-xl
-              bg-slate-50
-              dark:bg-slate-950
               border
               border-slate-200
-              dark:border-slate-800
+              dark:border-slate-700
               p-4
             ">
 
               <div className="
-                text-[11px]
-                uppercase
+                text-xs
                 text-slate-500
-                font-bold
               ">
-                Current policy
+                Selected Window
               </div>
-
 
               <div className="
                 mt-1
-                text-sm
-                font-bold
-                text-indigo-600
+                text-lg
+                font-black
               ">
-
-                {screenshotsPerWindow}
-
-                {' screenshot'}
-
-                {screenshotsPerWindow ===
-                1
-                  ? ''
-                  : 's'}
-
-                {' randomly within every '}
 
                 {captureWindowSeconds <
                 60
 
-                  ? `${captureWindowSeconds} seconds`
+                  ? `${captureWindowSeconds} sec`
 
                   : `${Math.round(
                       captureWindowSeconds /
-                      60
-                    )} minutes`
+                        60
+                    )} min`
                 }
 
               </div>
 
+            </div>
+
+
+            <div className="
+              rounded-xl
+              border
+              border-slate-200
+              dark:border-slate-700
+              p-4
+            ">
 
               <div className="
-                text-[11px]
+                text-xs
                 text-slate-500
-                mt-1
               ">
-                A new random schedule
-                is generated for
-                every window.
+                Screenshots per Window
+              </div>
+
+              <div className="
+                mt-1
+                text-lg
+                font-black
+              ">
+                {screenshotsPerWindow}
               </div>
 
             </div>
@@ -2822,19 +3672,15 @@ React.FC<AdminDashboardProps> = ({
           </div>
 
 
-          {/* LOCK */}
-
           <label className="
             flex
             items-center
             gap-3
-            p-4
-            border
-            border-amber-200
-            dark:border-amber-800
             rounded-xl
-            bg-amber-50/50
-            dark:bg-amber-950/20
+            border
+            border-slate-200
+            dark:border-slate-700
+            p-4
           ">
 
             <input
@@ -2848,7 +3694,8 @@ React.FC<AdminDashboardProps> = ({
                   true;
 
                 setLockIntervalForEmployees(
-                  e.target.checked
+                  e.target
+                    .checked
                 );
               }}
             />
@@ -2857,10 +3704,10 @@ React.FC<AdminDashboardProps> = ({
             <div>
 
               <div className="
-                text-xs
+                text-sm
                 font-bold
               ">
-                Lock capture interval
+                Lock capture policy
                 for employees
               </div>
 
@@ -2868,10 +3715,10 @@ React.FC<AdminDashboardProps> = ({
                 text-[11px]
                 text-slate-500
               ">
-                When enabled,
-                employee workstations
-                cannot change
-                screenshot timing.
+                Employees will use
+                the global capture
+                policy configured
+                here.
               </div>
 
             </div>
@@ -2879,9 +3726,8 @@ React.FC<AdminDashboardProps> = ({
           </label>
 
 
-          {/* SAVE */}
-
           <button
+            type="button"
             onClick={() =>
               void saveGlobalCaptureSettings()
             }
@@ -2891,14 +3737,14 @@ React.FC<AdminDashboardProps> = ({
               items-center
               gap-2
               px-5
-              py-3
+              py-2.5
               rounded-xl
               bg-indigo-600
               hover:bg-indigo-500
-              text-white
-              text-xs
-              font-bold
               disabled:opacity-50
+              text-white
+              text-sm
+              font-bold
             "
           >
 
@@ -2907,10 +3753,34 @@ React.FC<AdminDashboardProps> = ({
               h-4
             " />
 
-            Save & Apply To All
-            Employees
+            Save Global Settings
 
           </button>
+
+
+          <div className="
+            text-[11px]
+            text-slate-500
+          ">
+            Capture mode:{' '}
+            {captureMode}
+
+            {' • '}
+
+            Interval:{' '}
+            {captureIntervalSeconds}
+            s
+
+            {' • '}
+
+            Employee lock:{' '}
+
+            {lockIntervalForEmployees
+              ? 'On'
+              : 'Off'
+            }
+
+          </div>
 
         </div>
 
@@ -2918,7 +3788,7 @@ React.FC<AdminDashboardProps> = ({
 
 
       {/* ================================================================
-          IMAGE PREVIEW
+          SCREENSHOT PREVIEW MODAL
       ================================================================= */}
 
       {previewImage && (
@@ -2927,25 +3797,31 @@ React.FC<AdminDashboardProps> = ({
           className="
             fixed
             inset-0
-            z-50
-            bg-black/80
+            z-[100]
+            bg-black/90
             p-4
             flex
             items-center
             justify-center
           "
           onClick={() =>
-            setPreviewImage(null)
+            setPreviewImage(
+              null
+            )
           }
         >
 
           <div
             className="
-              max-w-6xl
+              relative
+              max-w-7xl
               w-full
             "
-            onClick={(e) =>
-              e.stopPropagation()
+            onClick={(
+              event
+            ) =>
+              event
+                .stopPropagation()
             }
           >
 
@@ -2978,8 +3854,12 @@ React.FC<AdminDashboardProps> = ({
 
 
             <img
-              src={adminScreenshotUrls[previewImage.localUrl] || previewImage.localUrl}
-              alt={previewImage.fileName}
+              src={
+                previewImage.localUrl
+              }
+              alt={
+                previewImage.fileName
+              }
               className="
                 max-h-[85vh]
                 w-auto
@@ -2987,6 +3867,20 @@ React.FC<AdminDashboardProps> = ({
                 rounded-xl
                 shadow-2xl
               "
+              onError={(event) => {
+
+                console.error(
+                  'Preview screenshot failed:',
+                  previewImage.fileName,
+                  previewImage.localUrl
+                );
+
+                event
+                  .currentTarget
+                  .style
+                  .display =
+                  'none';
+              }}
             />
 
           </div>
