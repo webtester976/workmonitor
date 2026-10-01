@@ -2,7 +2,6 @@ import express from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
-import https from 'https';
 import cors from 'cors';
 import { fileURLToPath } from 'url';
 
@@ -11,32 +10,41 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
+// Railway/Render/etc. terminate HTTPS before forwarding to Express.
+app.set('trust proxy', 1);
+
 // ======================================================
 // CORS
 // ======================================================
 
+const extraAllowedOrigins = String(
+  process.env.ALLOWED_ORIGINS || ''
+)
+  .split(',')
+  .map((value) => value.trim())
+  .filter(Boolean);
+
 const allowedOrigins = [
   'https://workmonitor-desktop.pages.dev',
+  'http://localhost:3000',
+  'http://localhost:3001',
   'https://localhost:3000',
   'https://localhost:3001',
   'https://192.168.29.228:3000',
   'https://192.168.29.228:3001',
+  ...extraAllowedOrigins,
 ];
 
 const corsOptions = {
   origin(origin, callback) {
-    // Allow requests without Origin header.
     if (!origin) {
       return callback(null, true);
     }
 
-    // Main production + local URLs.
     if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
-    // Allow Cloudflare Pages preview deployment URLs:
-    // https://212b26fe.workmonitor-desktop.pages.dev
     if (
       /^https:\/\/[a-zA-Z0-9-]+\.workmonitor-desktop\.pages\.dev$/.test(
         origin
@@ -45,10 +53,23 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    console.warn('🚫 Blocked CORS origin:', origin);
+    if (
+      /^https:\/\/[a-zA-Z0-9.-]+\.up\.railway\.app$/.test(
+        origin
+      )
+    ) {
+      return callback(null, true);
+    }
+
+    console.warn(
+      '🚫 Blocked CORS origin:',
+      origin
+    );
 
     return callback(
-      new Error(`CORS origin not allowed: ${origin}`)
+      new Error(
+        `CORS origin not allowed: ${origin}`
+      )
     );
   },
 
@@ -76,10 +97,15 @@ const corsOptions = {
   optionsSuccessStatus: 204,
 };
 
-// cors() handles normal requests + OPTIONS preflight.
-app.use(cors(corsOptions));
+app.use(
+  cors(corsOptions)
+);
 
-app.use(express.json({ limit: '20mb' }));
+app.use(
+  express.json({
+    limit: '20mb',
+  })
+);
 
 // ======================================================
 // STORAGE
@@ -87,7 +113,10 @@ app.use(express.json({ limit: '20mb' }));
 
 const UPLOAD_DIR =
   process.env.SCREENSHOT_DIR ||
-  'C:\\screenshots';
+  path.join(
+    __dirname,
+    'data'
+  );
 
 const EMPLOYEE_DB =
   path.join(
@@ -133,7 +162,6 @@ const DEFAULT_CAPTURE_SETTINGS = {
   lockIntervalForEmployees:
     true,
 
-  // Legacy frontend compatibility
   captureIntervalSeconds:
     600,
 
@@ -590,21 +618,6 @@ function findEmployeeById(
 // ======================================================
 // SCREENSHOT FOLDER STRUCTURE
 // ======================================================
-//
-// C:\screenshots\
-//   EMAIL\
-//     FIRSTNAME LASTNAME\
-//       MONTH YEAR\
-//         YYYY-MM-DD\
-//           screenshot.webp
-//
-// Example:
-// C:\screenshots\
-//   jack123@gmail.com\
-//     Jack Ford\
-//       September 2026\
-//         2026-09-14\
-// ======================================================
 
 function employeeEmailFolderPath(
   employee
@@ -806,8 +819,10 @@ function buildScreenshotUrl(
   const host =
     req.get(
       'host'
-    ) ||
-    '192.168.29.228:3001';
+    );
+
+  const protocol =
+    req.protocol;
 
   const emailFolder =
     safeSegment(
@@ -831,7 +846,7 @@ function buildScreenshotUrl(
     );
 
   return (
-    `https://${host}/screenshots/` +
+    `${protocol}://${host}/screenshots/` +
     `${encodeURIComponent(
       emailFolder
     )}/` +
@@ -985,7 +1000,14 @@ app.get(
         'email-name-month-date',
 
       screenshotPathExample:
-        'C:\\screenshots\\email@example.com\\First Last\\September 2026\\2026-09-14\\image.webp',
+        path.join(
+          UPLOAD_DIR,
+          'email@example.com',
+          'First Last',
+          'September 2026',
+          '2026-09-14',
+          'image.webp'
+        ),
 
       employeeDatabase:
         EMPLOYEE_DB,
@@ -3584,6 +3606,43 @@ app.use(
 );
 
 // ======================================================
+// FRONTEND - SERVE VITE BUILD
+// ======================================================
+
+const distPath =
+  path.join(
+    __dirname,
+    'dist'
+  );
+
+if (
+  fs.existsSync(
+    distPath
+  )
+) {
+  app.use(
+    express.static(
+      distPath
+    )
+  );
+
+  app.get(
+    /^(?!\/api(?:\/|$)|\/screenshots(?:\/|$)).*/,
+    (
+      req,
+      res
+    ) => {
+      res.sendFile(
+        path.join(
+          distPath,
+          'index.html'
+        )
+      );
+    }
+  );
+}
+
+// ======================================================
 // ERROR HANDLER
 // ======================================================
 
@@ -3623,7 +3682,7 @@ app.use(
 );
 
 // ======================================================
-// HTTPS SERVER
+// SERVER
 // ======================================================
 
 const PORT =
@@ -3632,121 +3691,56 @@ const PORT =
   ) ||
   3001;
 
-const CERT_PATH =
-  path.join(
-    __dirname,
-    'certs',
-    '192.168.29.228+2.pem'
-  );
+app.listen(
+  PORT,
+  '0.0.0.0',
+  () => {
+    console.log('');
 
-const KEY_PATH =
-  path.join(
-    __dirname,
-    'certs',
-    '192.168.29.228+2-key.pem'
-  );
+    console.log(
+      '=============================================='
+    );
 
-if (
-  !fs.existsSync(
-    CERT_PATH
-  ) ||
-  !fs.existsSync(
-    KEY_PATH
-  )
-) {
-  console.error(
-    '❌ HTTPS certificate files are missing.'
-  );
+    console.log(
+      `✅ WorkMonitor server running on port ${PORT}`
+    );
 
-  console.error(
-    'Expected certificate:',
-    CERT_PATH
-  );
+    console.log(
+      `📁 Screenshot root: ${UPLOAD_DIR}`
+    );
 
-  console.error(
-    'Expected key:',
-    KEY_PATH
-  );
+    console.log(
+      '📂 Screenshot structure:'
+    );
 
-  process.exit(
-    1
-  );
-}
+    console.log(
+      '   EMAIL > FIRST LAST > MONTH YEAR > YYYY-MM-DD'
+    );
 
-const httpsOptions = {
-  key:
-    fs.readFileSync(
-      KEY_PATH
-    ),
+    console.log(
+      `👥 Employees: ${EMPLOYEE_DB}`
+    );
 
-  cert:
-    fs.readFileSync(
-      CERT_PATH
-    ),
-};
+    console.log(
+      `🕒 Pending: ${PENDING_DB}`
+    );
 
-https
-  .createServer(
-    httpsOptions,
-    app
-  )
-  .listen(
-    PORT,
-    '0.0.0.0',
-    () => {
-      console.log('');
-      console.log(
-        '=============================================='
-      );
+    console.log(
+      `⏱ Tracker: ${TRACKER_DB}`
+    );
 
-      console.log(
-        `✅ HTTPS backend running on https://192.168.29.228:${PORT}`
-      );
+    console.log(
+      `⚙️ Capture Settings: ${CAPTURE_SETTINGS_DB}`
+    );
 
-      console.log(
-        `📁 Screenshot root: ${UPLOAD_DIR}`
-      );
+    console.log(
+      '🌐 Production-ready HTTP server (hosting platform provides HTTPS)'
+    );
 
-      console.log(
-        '📂 Screenshot structure:'
-      );
+    console.log(
+      '=============================================='
+    );
 
-      console.log(
-        '   EMAIL > FIRST LAST > MONTH YEAR > YYYY-MM-DD'
-      );
-
-      console.log(
-        '📌 Example:'
-      );
-
-      console.log(
-        '   jack123@gmail.com\\Jack Ford\\September 2026\\2026-09-14'
-      );
-
-      console.log(
-        `👥 Employees: ${EMPLOYEE_DB}`
-      );
-
-      console.log(
-        `🕒 Pending: ${PENDING_DB}`
-      );
-
-      console.log(
-        `⏱ Tracker: ${TRACKER_DB}`
-      );
-
-      console.log(
-        `⚙️ Capture Settings: ${CAPTURE_SETTINGS_DB}`
-      );
-
-      console.log(
-        '🌐 Cloudflare Pages CORS enabled'
-      );
-
-      console.log(
-        '=============================================='
-      );
-
-      console.log('');
-    }
-  );
+    console.log('');
+  }
+);
