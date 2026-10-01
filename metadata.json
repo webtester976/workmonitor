@@ -1,0 +1,10 @@
+{
+  "name": "Employee Time Tracker & Monitor",
+  "description": "Desktop employee time tracking and activity monitoring application with automated screenshot logging to Google Drive and hourly task tracking in Google Sheets.",
+  "requestFramePermissions": [
+    "display-capture"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

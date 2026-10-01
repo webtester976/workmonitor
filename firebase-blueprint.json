@@ -1,0 +1,110 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile in the time tracker system",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "employee"] },
+        "approved": { "type": "boolean" },
+        "createdAt": { "type": "string" },
+        "lastActive": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "role", "approved"]
+    },
+    "PendingSignup": {
+      "title": "PendingSignup",
+      "description": "Pending employee registration awaiting code verification by the admin",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "confirmationCode": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "confirmationCode", "timestamp"]
+    },
+    "TaskLog": {
+      "title": "TaskLog",
+      "description": "Completed or switched task interval logged to Google Sheet and synced",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "taskName": { "type": "string" },
+        "dateKey": { "type": "string" },
+        "startTime": { "type": "string" },
+        "endTime": { "type": "string" },
+        "durationSeconds": { "type": "number" },
+        "durationHours": { "type": "number" },
+        "status": { "type": "string" },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["id", "userId", "userName", "taskName", "startTime", "endTime", "durationSeconds"]
+    },
+    "ScreenshotRecord": {
+      "title": "ScreenshotRecord",
+      "description": "Metadata and Google Drive links for employee desktop screenshots",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "taskName": { "type": "string" },
+        "dateKey": { "type": "string" },
+        "hourKey": { "type": "string" },
+        "timeFormatted": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "fileFormat": { "type": "string" },
+        "driveFileId": { "type": "string" },
+        "driveWebLink": { "type": "string" },
+        "previewDataUrl": { "type": "string" },
+        "productivityScore": { "type": "number" }
+      },
+      "required": ["id", "userId", "userName", "taskName", "dateKey", "timeFormatted", "timestamp"]
+    },
+    "StorageSettings": {
+      "title": "StorageSettings",
+      "description": "Global storage destination configuration set by Admin",
+      "type": "object",
+      "properties": {
+        "destinationMode": { "type": "string" },
+        "centralAdminEmail": { "type": "string" },
+        "centralFolderName": { "type": "string" },
+        "screenshotFormat": { "type": "string" },
+        "autoCaptureIntervalMinutes": { "type": "number" },
+        "spreadsheetName": { "type": "string" }
+      },
+      "required": ["destinationMode", "centralAdminEmail", "centralFolderName", "spreadsheetName"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "Active registered and approved employees and admins"
+    },
+    "/pendingSignups/{signupId}": {
+      "schema": { "$ref": "#/entities/PendingSignup" },
+      "description": "Pending employee registrations and confirmation codes"
+    },
+    "/taskLogs/{logId}": {
+      "schema": { "$ref": "#/entities/TaskLog" },
+      "description": "Task interval tracking logs synced across clients and Google Sheets"
+    },
+    "/screenshots/{screenId}": {
+      "schema": { "$ref": "#/entities/ScreenshotRecord" },
+      "description": "Employee desktop screenshot logs with Google Drive links"
+    },
+    "/settings/storage": {
+      "schema": { "$ref": "#/entities/StorageSettings" },
+      "description": "Global admin storage settings"
+    }
+  }
+}
