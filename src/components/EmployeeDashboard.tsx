@@ -1944,7 +1944,7 @@ export const EmployeeDashboard:
     const id =
       window.setInterval(
         loadDateHistory,
-        10000
+        30 * 60 * 1000
       );
 
     return () =>
