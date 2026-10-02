@@ -92,7 +92,9 @@ const readApiJson = async (
     );
 
     throw new Error(
-      `Backend returned non-JSON response (${response.status}). Restart node server.js.`
+      response.status === 429
+        ? 'Backend is rate-limited (429). Please wait a moment and retry.'
+        : `Backend returned non-JSON response (${response.status}).`
     );
   }
 
@@ -1671,7 +1673,7 @@ export const EmployeeDashboard:
     const id =
       window.setInterval(
         loadPolicy,
-        5000
+        30000
       );
 
     return () => {
@@ -1944,7 +1946,7 @@ export const EmployeeDashboard:
     const id =
       window.setInterval(
         loadDateHistory,
-        10 * 60 * 1000
+        30000
       );
 
     return () =>
