@@ -6,13 +6,38 @@ import path from 'node:path';
 // ======================================================
 
 const WORKER_URL =
-  'https://codesdot-workmonitor.work-nest.workers.dev';
+  (process.env.WORKER_URL ||
+    'https://codesdot-workmonitor.workers.dev').replace(/\/$/, '');
 
 const SCREENSHOT_ROOT =
   'C:\\screenshots';
 
 const SYNC_INTERVAL_MS =
-  30 * 1000;
+  60 * 60 * 1000;
+
+// Cloud screenshot sync is allowed only during the employee
+// tracking window in India Standard Time.
+const INDIA_TIME_ZONE = 'Asia/Kolkata';
+const TRACKING_START_MINUTES = 8 * 60 + 30;
+const TRACKING_END_MINUTES = 20 * 60 + 30;
+
+const getIndiaMinutes = () => {
+  const parts = new Intl.DateTimeFormat('en-IN', {
+    timeZone: INDIA_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date());
+
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((p) => p.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
+};
+
+const isCloudSyncWindowOpen = () => {
+  const minutes = getIndiaMinutes();
+  return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
+};
 
 
 // ======================================================
@@ -573,7 +598,11 @@ const start =
 
       try {
 
-        await syncAll();
+        if (!isCloudSyncWindowOpen()) {
+          console.log('⏸ Cloud sync paused: outside 08:30 AM–08:30 PM IST.');
+        } else {
+          await syncAll();
+        }
 
       } catch (error) {
 

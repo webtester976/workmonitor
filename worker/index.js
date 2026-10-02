@@ -9,6 +9,30 @@ function json(data, status = 200) {
   });
 }
 
+
+const INDIA_TIME_ZONE = 'Asia/Kolkata';
+const TRACKING_START_MINUTES = 8 * 60 + 30;
+const TRACKING_END_MINUTES = 20 * 60 + 30;
+
+function getIndiaClock(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-IN', {
+    timeZone: INDIA_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+
+  const value = (type) => Number(parts.find((part) => part.type === type)?.value || 0);
+  return { hour: value('hour'), minute: value('minute'), second: value('second') };
+}
+
+function isScreenshotUploadWindowOpen(date = new Date()) {
+  const clock = getIndiaClock(date);
+  const minutes = clock.hour * 60 + clock.minute;
+  return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
+}
+
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -2450,6 +2474,19 @@ async function handleApi(
     pathname ===
       '/api/upload-screenshot'
   ) {
+
+    // Hard server-side guard: screenshot uploads are allowed only during
+    // the India tracking window and at most once per hour per employee.
+    // This protects KV/D1 even if an old client keeps sending requests.
+    if (!isScreenshotUploadWindowOpen()) {
+      return json({
+        success: false,
+        paused: true,
+        error: 'Screenshot sharing is paused outside 08:30 AM–08:30 PM IST.',
+      }, 429);
+    }
+
+
     if (
       !env.SCREENSHOTS
     ) {
@@ -2562,6 +2599,37 @@ async function handleApi(
       );
     }
 
+
+    const latestUpload = await env.DB
+      .prepare(`
+        SELECT uploaded_at
+        FROM screenshot_index
+        WHERE employee_id = ?
+        ORDER BY uploaded_at DESC
+        LIMIT 1
+      `)
+      .bind(employeeId)
+      .first();
+
+    if (latestUpload?.uploaded_at) {
+      const elapsedMs = Date.now() - Date.parse(latestUpload.uploaded_at);
+      if (Number.isFinite(elapsedMs) && elapsedMs < 60 * 60 * 1000) {
+        const retryAfterSeconds = Math.max(1, Math.ceil((60 * 60 * 1000 - elapsedMs) / 1000));
+        return new Response(JSON.stringify({
+          success: false,
+          rateLimited: true,
+          error: 'Screenshot upload is limited to once per hour per employee.',
+          retryAfterSeconds,
+        }), {
+          status: 429,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Retry-After': String(retryAfterSeconds),
+          },
+        });
+      }
+    }
 
     const dateKey =
       isDateKey(
