@@ -7,7 +7,7 @@ import path from 'node:path';
 
 const WORKER_URL =
   (process.env.WORKER_URL ||
-    'https://codesdot-workmonitor.workers.dev').replace(/\/$/, '');
+    'https://codesdot-workmonitor.work-nest.workers.dev').replace(/\/$/, '');
 
 const SCREENSHOT_ROOT =
   'C:\\screenshots';

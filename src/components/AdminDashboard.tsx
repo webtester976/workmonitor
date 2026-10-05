@@ -191,6 +191,15 @@ const readApiJson = async (
 };
 
 
+const readAdminBootstrap = () => {
+  try {
+    const raw = localStorage.getItem('workmonitor_admin_bootstrap');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
 /* ==========================================================================
    ADMIN DASHBOARD
 ========================================================================== */
@@ -230,15 +239,16 @@ React.FC<AdminDashboardProps> = ({
     );
 
 
+  const bootstrap = readAdminBootstrap();
+
   const [
     centralUsers,
     setCentralUsers,
   ] =
     useState<AppUser[]>(
-      allUsers.filter(
-        (u) =>
-          u.role === 'employee'
-      )
+      Array.isArray(bootstrap?.employees)
+        ? bootstrap.employees.map((employee: any) => ({ ...employee, role: 'employee', approved: employee.approved !== false }))
+        : allUsers.filter((u) => u.role === 'employee')
     );
 
 
@@ -247,7 +257,7 @@ React.FC<AdminDashboardProps> = ({
     setCentralPending,
   ] =
     useState<any[]>(
-      pendingSignups || []
+      Array.isArray(bootstrap?.pending) ? bootstrap.pending : (pendingSignups || [])
     );
 
 
@@ -256,7 +266,7 @@ React.FC<AdminDashboardProps> = ({
     setSummaryRows,
   ] =
     useState<ActivitySummaryRow[]>(
-      []
+      Array.isArray(bootstrap?.summary) ? bootstrap.summary : []
     );
 
 
@@ -428,6 +438,39 @@ React.FC<AdminDashboardProps> = ({
   ] =
     useState<number>(20);
 
+
+  // Login already provided the initial admin data. Do not start polling.
+  useEffect(() => {
+    const cached = readAdminBootstrap();
+    if (!cached) return;
+
+    if (Array.isArray(cached.employees)) {
+      const employees = cached.employees.map((employee: any) => ({
+        ...employee,
+        role: 'employee',
+        approved: employee.approved !== false,
+      }));
+      setCentralUsers(employees);
+      const nonEmployees = allUsers.filter((u) => u.role !== 'employee');
+      onUpdateUsers([...nonEmployees, ...employees]);
+    }
+
+    if (Array.isArray(cached.pending)) {
+      setCentralPending(cached.pending);
+      onUpdatePendingSignups(cached.pending);
+    }
+
+    if (cached.captureSettings) {
+      const settings = cached.captureSettings;
+      setCaptureMode(settings.captureMode || 'random_count_window');
+      setCaptureIntervalSeconds(Number(settings.captureIntervalSeconds || settings.captureWindowSeconds || 600));
+      setAllowedIntervals(settings.allowedIntervals || []);
+      setLockIntervalForEmployees(settings.lockIntervalForEmployees !== false);
+      setCaptureWindowSeconds(Math.max(5, Number(settings.captureWindowSeconds || 600)));
+      setScreenshotsPerWindow(Math.max(1, Number(settings.screenshotsPerWindow || 5)));
+      setPresetId(String(settings.presetId || 'custom'));
+    }
+  }, []);
 
   /* ==========================================================================
      FLASH MESSAGE
@@ -834,28 +877,8 @@ React.FC<AdminDashboardProps> = ({
      INITIAL ADMIN LOAD
   ========================================================================== */
 
-  useEffect(() => {
-
-    void refreshCentralData();
-
-
-    const timer =
-      window.setInterval(
-        () =>
-          void refreshCentralData(
-            true
-          ),
-        30000
-      );
-
-
-    return () =>
-      window.clearInterval(
-        timer
-      );
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // No automatic admin polling. Fresh data is requested only after explicit
+  // admin actions or when the admin manually refreshes a section.
 
 
   /* ==========================================================================

@@ -36,6 +36,7 @@ import {
 
 import {
   getLocalScreenshots,
+  startScreenshotUploadScheduler,
   uploadScreenshotLocally,
 } from '../lib/localStorageService';
 
@@ -59,82 +60,32 @@ const getBackendUrl = (): string => {
     return configured.replace(/\/$/, '');
   }
 
-  if (typeof window !== 'undefined') {
-    return window.location.origin;
-  }
-
-  return '';
+  return 'https://codesdot-workmonitor.work-nest.workers.dev';
 };
 
-
 // ====================================================
-// SCREENSHOT SCHEDULE — INDIA TIME
+// SCREENSHOT CLOUD UPLOAD WINDOW
 // ====================================================
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const TRACKING_START_MINUTES = 8 * 60 + 30;
 const TRACKING_END_MINUTES = 20 * 60 + 30;
-const SCREENSHOT_INTERVAL_MS = 60 * 60 * 1000;
 
-const getIndiaClock = (date = new Date()) => {
+const getIndiaMinutes = (date = new Date()) => {
   const parts = new Intl.DateTimeFormat('en-IN', {
     timeZone: INDIA_TIME_ZONE,
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(date);
-
-  const get = (type: string) =>
-    Number(parts.find((part) => part.type === type)?.value || 0);
-
-  return {
-    hour: get('hour'),
-    minute: get('minute'),
-    second: get('second'),
-  };
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
 };
 
-const getIndiaMinutes = (date = new Date()) => {
-  const clock = getIndiaClock(date);
-  return clock.hour * 60 + clock.minute;
-};
-
-const isScreenshotWindowOpen = (date = new Date()) => {
+const isScreenshotUploadWindowOpen = (date = new Date()) => {
   const minutes = getIndiaMinutes(date);
   return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
-};
-
-const getNextScreenshotDelayMs = (date = new Date()) => {
-  const minutes = getIndiaMinutes(date);
-  const seconds = getIndiaClock(date).second;
-
-  if (minutes < TRACKING_START_MINUTES) {
-    return ((TRACKING_START_MINUTES - minutes) * 60 - seconds) * 1000;
-  }
-
-  if (minutes > TRACKING_END_MINUTES ||
-      (minutes === TRACKING_END_MINUTES && seconds > 0)) {
-    // Wait until tomorrow's 08:30 AM IST.
-    const current = new Date(date);
-    const tomorrow = new Date(current.getTime() + 24 * 60 * 60 * 1000);
-    const tomorrowParts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: INDIA_TIME_ZONE,
-      year: 'numeric', month: '2-digit', day: '2-digit',
-    }).formatToParts(tomorrow);
-    const year = Number(tomorrowParts.find((p) => p.type === 'year')?.value);
-    const month = Number(tomorrowParts.find((p) => p.type === 'month')?.value);
-    const day = Number(tomorrowParts.find((p) => p.type === 'day')?.value);
-    const target = new Date(Date.UTC(year, month - 1, day, 3, 0, 0));
-    return Math.max(1000, target.getTime() - date.getTime());
-  }
-
-  // During the window, schedule the next fixed hourly slot (:30).
-  const currentSeconds = minutes * 60 + seconds;
-  const startSeconds = TRACKING_START_MINUTES * 60;
-  const elapsed = currentSeconds - startSeconds;
-  const nextSlot = Math.ceil((elapsed + 1) / 3600) * 3600 + startSeconds;
-  return Math.max(1000, (nextSlot - currentSeconds) * 1000);
 };
 
 // ======================================================
@@ -497,6 +448,31 @@ export const EmployeeDashboard:
   ]);
 
   // ====================================================
+  // LOGIN BOOTSTRAP POLICY (NO POLLING)
+  // ====================================================
+
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('workmonitor_employee_capture_settings');
+      if (!raw) return;
+
+      const settings = JSON.parse(raw);
+      const newWindow = Math.max(5, Number(settings?.captureWindowSeconds || settings?.captureIntervalSeconds || 600));
+      const newCount = Math.max(1, Number(settings?.screenshotsPerWindow || 5));
+      const newPreset = String(settings?.presetId || '10m-5');
+
+      setCaptureWindowSeconds(newWindow);
+      setScreenshotsPerWindow(newCount);
+      setCapturePresetId(newPreset);
+      setCentralPolicyUpdatedAt(String(settings?.updatedAt || ''));
+      captureWindowRef.current = newWindow;
+      screenshotCountRef.current = newCount;
+    } catch (error) {
+      console.warn('Capture policy bootstrap warning:', error);
+    }
+  }, []);
+
+  // ====================================================
   // LOCAL TIMER STORAGE
   // ====================================================
 
@@ -672,84 +648,6 @@ export const EmployeeDashboard:
     };
 
   // ====================================================
-  // LOAD CENTRAL TODAY TIME
-  // ====================================================
-
-  useEffect(() => {
-    let cancelled =
-      false;
-
-    const load =
-      async () => {
-        try {
-          const response =
-            await fetch(
-              `${backendUrl}/api/tracker-time/` +
-                `${encodeURIComponent(
-                  currentUser.id
-                )}/` +
-                `${getTodayDateKey()}`,
-              {
-                cache:
-                  'no-store',
-                headers:
-                  backendHeaders,
-              }
-            );
-
-          const data =
-            await readApiJson(
-              response
-            );
-
-          if (
-            cancelled ||
-            !response.ok ||
-            !data?.success
-          ) {
-            return;
-          }
-
-          const centralSeconds =
-            Math.max(
-              0,
-              Number(
-                data.totalSeconds ||
-                  0
-              )
-            );
-
-          setDayTotalSeconds(
-            (
-              previous
-            ) =>
-              Math.max(
-                previous,
-                centralSeconds
-              )
-          );
-        } catch (
-          error
-        ) {
-          console.warn(
-            'Central tracker load warning:',
-            error
-          );
-        }
-      };
-
-    load();
-
-    return () => {
-      cancelled =
-        true;
-    };
-  }, [
-    backendUrl,
-    currentUser.id,
-  ]);
-
-  // ====================================================
   // TIMER
   // ====================================================
 
@@ -801,32 +699,6 @@ export const EmployeeDashboard:
         );
       }
     };
-  }, [
-    isTracking,
-    isPaused,
-  ]);
-
-  // Sync every 10 sec
-  useEffect(() => {
-    if (
-      !isTracking ||
-      isPaused
-    ) {
-      return;
-    }
-
-    const id =
-      window.setInterval(
-        () => {
-          void syncTrackerTime();
-        },
-        60000
-      );
-
-    return () =>
-      window.clearInterval(
-        id
-      );
   }, [
     isTracking,
     isPaused,
@@ -1095,11 +967,6 @@ export const EmployeeDashboard:
         return;
       }
 
-      if (!isScreenshotWindowOpen()) {
-        setLastStatus('⏸ Screenshot sharing paused outside 08:30 AM–08:30 PM IST.');
-        return;
-      }
-
       try {
         setLastStatus(
           'Capturing screenshot...'
@@ -1279,7 +1146,11 @@ export const EmployeeDashboard:
         );
 
         setLastStatus(
-          `✅ Screenshot saved: ${result.filePath}`
+          `✅ Screenshot saved locally and queued for cloud upload. ${
+            isScreenshotUploadWindowOpen()
+              ? 'Cloud upload runs in hourly batches.'
+              : 'Cloud sharing is paused outside 08:30 AM–08:30 PM IST.'
+          }`
         );
 
         // Refresh selected date after upload
@@ -1335,220 +1206,281 @@ export const EmployeeDashboard:
       }
     };
 
-  const scheduleRandomWindow = () => {
-    clearCaptureTimers();
+  const scheduleRandomWindow =
+    (
+      windowSeconds =
+        captureWindowRef.current,
 
-    if (!trackingRef.current || pausedRef.current) {
-      return;
-    }
+      screenshotCount =
+        screenshotCountRef.current
+    ) => {
 
-    const schedule = () => {
-      if (!trackingRef.current || pausedRef.current) {
-        clearCaptureTimers();
+      clearCaptureTimers();
+
+      if (
+        !trackingRef.current ||
+        pausedRef.current
+      ) {
         return;
       }
 
-      const now = new Date();
-      const delay = getNextScreenshotDelayMs(now);
-      const insideWindow = isScreenshotWindowOpen(now);
-
-      setNextCaptureInSec(Math.ceil(delay / 1000));
-
-      countdownRef.current = window.setInterval(() => {
-        setNextCaptureInSec((previous) =>
-          previous === null || previous <= 1 ? 0 : previous - 1
+      const safeWindow =
+        Math.max(
+          5,
+          Math.floor(
+            Number(
+              windowSeconds
+            ) || 600
+          )
         );
-      }, 1000);
 
-      captureTimerRef.current = window.setTimeout(async () => {
-        clearCaptureTimers();
+      const safeCount =
+        Math.max(
+          1,
+          Math.floor(
+            Number(
+              screenshotCount
+            ) || 1
+          )
+        );
 
-        if (trackingRef.current && !pausedRef.current && isScreenshotWindowOpen()) {
-          await captureAndUpload();
-          // Next capture is exactly one hour later.
-          setLastStatus('✅ Screenshot processed. Next screenshot is scheduled in 1 hour.');
-          captureTimerRef.current = window.setTimeout(schedule, SCREENSHOT_INTERVAL_MS);
-          setNextCaptureInSec(3600);
-          return;
-        }
+      const windowMs =
+        safeWindow *
+        1000;
 
-        schedule();
-      }, delay);
+      // Divide full window into random zones.
+      // This keeps shots random but prevents them
+      // all coming at exactly the same second.
+      const randomPositions =
+        Array.from(
+          {
+            length:
+              safeCount,
+          },
 
-      if (!insideWindow) {
-        setLastStatus('⏸ Screenshot sharing paused outside 08:30 AM–08:30 PM IST.');
-      } else {
-        setLastStatus('⏱ Screenshot sharing is limited to once per hour.');
-      }
-    };
+          (
+            _,
+            index
+          ) => {
 
-    schedule();
-  };
+            const zoneStart =
+              (
+                windowMs *
+                index
+              ) /
+              safeCount;
 
-  // ====================================================
-  // GLOBAL POLICY POLLING
-  // ====================================================
+            const zoneEnd =
+              (
+                windowMs *
+                (
+                  index +
+                  1
+                )
+              ) /
+              safeCount;
 
-  useEffect(() => {
-    let cancelled =
-      false;
+            const padding =
+              Math.min(
+                500,
+                Math.max(
+                  50,
+                  (
+                    zoneEnd -
+                    zoneStart
+                  ) *
+                    0.05
+                )
+              );
 
-    let previousSignature =
-      '';
+            const start =
+              zoneStart +
+              padding;
 
-    const loadPolicy =
-      async () => {
-        try {
-          const response =
-            await fetch(
-              `${backendUrl}/api/capture-settings`,
-              {
-                cache:
-                  'no-store',
-                headers:
-                  backendHeaders,
-              }
+            const end =
+              Math.max(
+                start +
+                  25,
+                zoneEnd -
+                  padding
+              );
+
+            return Math.floor(
+              start +
+                Math.random() *
+                  (
+                    end -
+                    start
+                  )
             );
+          }
+        ).sort(
+          (
+            a,
+            b
+          ) =>
+            a - b
+        );
 
-          const data =
-            await readApiJson(
-              response
-            );
+      let index =
+        0;
+
+      let elapsedPosition =
+        0;
+
+      const scheduleNext =
+        () => {
 
           if (
-            cancelled ||
-            !response.ok ||
-            !data?.success ||
-            !data?.settings
+            !trackingRef.current ||
+            pausedRef.current
           ) {
+            clearCaptureTimers();
             return;
           }
 
-          const settings =
-            data.settings;
+          // All screenshots done.
+          // Wait until current window finishes,
+          // then generate a fresh random window.
+          if (
+            index >=
+            randomPositions.length
+          ) {
+            const remaining =
+              Math.max(
+                100,
+                windowMs -
+                  elapsedPosition
+              );
 
-          const newWindow =
-            Math.max(
-              5,
-              Number(
-                settings
-                  .captureWindowSeconds ||
-                  settings
-                    .captureIntervalSeconds ||
-                  600
+            setNextCaptureInSec(
+              Math.ceil(
+                remaining /
+                  1000
               )
             );
 
-          const newCount =
+            countdownRef.current =
+              window.setInterval(
+                () => {
+                  setNextCaptureInSec(
+                    (
+                      previous
+                    ) =>
+                      previous ===
+                        null ||
+                      previous <=
+                        1
+                        ? 0
+                        : previous -
+                          1
+                  );
+                },
+                1000
+              );
+
+            captureTimerRef.current =
+              window.setTimeout(
+                () => {
+                  clearCaptureTimers();
+
+                  scheduleRandomWindow(
+                    safeWindow,
+                    safeCount
+                  );
+                },
+                remaining
+              );
+
+            return;
+          }
+
+          const position =
+            randomPositions[
+              index
+            ];
+
+          const delay =
+            Math.max(
+              50,
+              position -
+                elapsedPosition
+            );
+
+          setNextCaptureInSec(
             Math.max(
               1,
-              Number(
-                settings
-                  .screenshotsPerWindow ||
-                  1
+              Math.ceil(
+                delay /
+                  1000
               )
-            );
-
-          const newPreset =
-            String(
-              settings
-                .presetId ||
-                'custom'
-            );
-
-          const signature =
-            `${newWindow}:` +
-            `${newCount}:` +
-            `${newPreset}:` +
-            `${
-              settings
-                .updatedAt ||
-              ''
-            }`;
-
-          setCentralPolicyUpdatedAt(
-            String(
-              settings
-                .updatedAt ||
-                ''
             )
           );
 
-          if (
-            previousSignature !==
-            signature
-          ) {
-            previousSignature =
-              signature;
-
-            setCaptureWindowSeconds(
-              newWindow
+          countdownRef.current =
+            window.setInterval(
+              () => {
+                setNextCaptureInSec(
+                  (
+                    previous
+                  ) =>
+                    previous ===
+                      null ||
+                    previous <=
+                      1
+                      ? 0
+                      : previous -
+                        1
+                );
+              },
+              1000
             );
 
-            setScreenshotsPerWindow(
-              newCount
+          captureTimerRef.current =
+            window.setTimeout(
+              async () => {
+
+                if (
+                  countdownRef.current
+                ) {
+                  clearInterval(
+                    countdownRef.current
+                  );
+
+                  countdownRef.current =
+                    null;
+                }
+
+                await captureAndUpload();
+
+                elapsedPosition =
+                  position;
+
+                index++;
+
+                scheduleNext();
+              },
+              delay
             );
+        };
 
-            setCapturePresetId(
-              newPreset
-            );
-
-            captureWindowRef.current =
-              newWindow;
-
-            screenshotCountRef.current =
-              newCount;
-
-            // Admin changed settings while employee
-            // is actively tracking.
-            if (
-              trackingRef.current &&
-              !pausedRef.current
-            ) {
-              scheduleRandomWindow();
-
-              setLastStatus(
-                `✅ New Admin policy applied: ${newCount} screenshot(s) / ${
-                  newWindow <
-                  60
-                    ? `${newWindow} sec`
-                    : `${Math.round(
-                        newWindow /
-                          60
-                      )} min`
-                }`
-              );
-            }
-          }
-        } catch (
-          error
-        ) {
-          console.warn(
-            'Capture policy warning:',
-            error
-          );
-        }
-      };
-
-    loadPolicy();
-
-    const id =
-      window.setInterval(
-        loadPolicy,
-        30000
-      );
-
-    return () => {
-      cancelled =
-        true;
-
-      window.clearInterval(
-        id
-      );
+      scheduleNext();
     };
-  }, [
-    backendUrl,
-  ]);
+
+  // ====================================================
+  // HOURLY CLOUD UPLOAD QUEUE
+  // ====================================================
+
+  useEffect(() => {
+    const stopScheduler = startScreenshotUploadScheduler();
+    return stopScheduler;
+  }, []);
+
+  // ====================================================
+  // GLOBAL POLICY
+  // ====================================================
+  // Capture policy is supplied by employee login and cached locally.
+  // No background /api/capture-settings polling is performed.
 
   // ====================================================
   // HISTORY
@@ -1802,24 +1734,7 @@ export const EmployeeDashboard:
       }
     };
 
-  useEffect(() => {
-    loadDateHistory();
-
-    const id =
-      window.setInterval(
-        loadDateHistory,
-        30000
-      );
-
-    return () =>
-      window.clearInterval(
-        id
-      );
-  }, [
-    selectedDate,
-    currentUser.id,
-    currentUser.name,
-  ]);
+  // History is loaded only when the user explicitly opens/refreshes it.
 
   // ====================================================
   // MERGE SCREENSHOTS

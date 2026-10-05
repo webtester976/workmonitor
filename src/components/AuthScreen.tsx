@@ -77,17 +77,7 @@ const getBackendUrl =
     }
 
 
-    if (
-      typeof window !==
-      'undefined'
-    ) {
-      return window
-        .location
-        .origin;
-    }
-
-
-    return '';
+    return 'https://codesdot-workmonitor.work-nest.workers.dev';
   };
 
 
@@ -494,6 +484,15 @@ React.FC<AuthScreenProps> = ({
           JSON.stringify(admin)
         );
 
+        // Cache the complete admin bootstrap so the dashboard does not poll
+        // employees, pending approvals, or capture settings on a timer.
+        if (data?.bootstrap) {
+          localStorage.setItem(
+            'workmonitor_admin_bootstrap',
+            JSON.stringify(data.bootstrap)
+          );
+        }
+
 
         setActiveSessionUser(
           admin
@@ -682,6 +681,15 @@ React.FC<AuthScreenProps> = ({
 
         const centralEmployee =
           data.employee;
+
+        // Cache capture policy returned by login. The employee dashboard
+        // reads this locally instead of polling /api/capture-settings.
+        if (data?.bootstrap?.captureSettings) {
+          localStorage.setItem(
+            'workmonitor_employee_capture_settings',
+            JSON.stringify(data.bootstrap.captureSettings)
+          );
+        }
 
 
         const employee:

@@ -299,6 +299,34 @@ export default function App() {
 
     setScreenshots([]);
 
+    // Login now returns the initial people/settings payload. Reuse it locally
+    // so the app does not generate background polling traffic.
+    try {
+      const adminBootstrapRaw = localStorage.getItem('workmonitor_admin_bootstrap');
+      if (adminBootstrapRaw) {
+        const bootstrap = JSON.parse(adminBootstrapRaw);
+        if (Array.isArray(bootstrap?.employees)) {
+          const employees = bootstrap.employees.map((employee: any) => ({
+            ...employee,
+            role: 'employee',
+            approved: employee.approved !== false,
+          }));
+          setAllUsers([...loadedUsers.filter((u) => u.role !== 'employee'), ...employees]);
+          saveStoredUsers([...loadedUsers.filter((u) => u.role !== 'employee'), ...employees]);
+        }
+        if (Array.isArray(bootstrap?.pending)) {
+          setPendingSignups(bootstrap.pending);
+          savePendingSignups(bootstrap.pending);
+        }
+        if (bootstrap?.captureSettings) {
+          const merged = mergeCentralCaptureSettings(storageSettings, bootstrap.captureSettings);
+          setStorageSettings(merged);
+          saveStorageSettings(merged);
+        }
+      }
+    } catch (error) {
+      console.warn('Bootstrap cache restore failed:', error);
+    }
 
     const sessionUser =
   getActiveSessionUser();
@@ -420,34 +448,10 @@ else if (
 }
 
 
-    void refreshCentralPeople();
-
-    void refreshCentralCaptureSettings();
-
-
-    const peopleTimer =
-      window.setInterval(
-        refreshCentralPeople,
-        5000
-      );
-
-
-    const settingsTimer =
-      window.setInterval(
-        refreshCentralCaptureSettings,
-        5000
-      );
-
-
-    return () => {
-      window.clearInterval(
-        peopleTimer
-      );
-
-      window.clearInterval(
-        settingsTimer
-      );
-    };
+    // IMPORTANT: no automatic backend polling here.
+    // Employee/admin login supplies the bootstrap data; explicit user actions
+    // still use the API when they actually need fresh data.
+    return () => {};
 
 
     // eslint-disable-next-line react-hooks/exhaustive-deps

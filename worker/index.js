@@ -9,30 +9,6 @@ function json(data, status = 200) {
   });
 }
 
-
-const INDIA_TIME_ZONE = 'Asia/Kolkata';
-const TRACKING_START_MINUTES = 8 * 60 + 30;
-const TRACKING_END_MINUTES = 20 * 60 + 30;
-
-function getIndiaClock(date = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-IN', {
-    timeZone: INDIA_TIME_ZONE,
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hourCycle: 'h23',
-  }).formatToParts(date);
-
-  const value = (type) => Number(parts.find((part) => part.type === type)?.value || 0);
-  return { hour: value('hour'), minute: value('minute'), second: value('second') };
-}
-
-function isScreenshotUploadWindowOpen(date = new Date()) {
-  const clock = getIndiaClock(date);
-  const minutes = clock.hour * 60 + clock.minute;
-  return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
-}
-
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
 }
@@ -113,6 +89,94 @@ function screenshotPrefix(
   dateKey = ''
 ) {
   return `shot:${employeeId}:${dateKey}`;
+}
+
+
+const INDIA_TIME_ZONE = 'Asia/Kolkata';
+const TRACKING_START_MINUTES = 8 * 60 + 30;
+const TRACKING_END_MINUTES = 20 * 60 + 30;
+
+function isScreenshotUploadWindowOpen(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-IN', {
+    timeZone: INDIA_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  const minutes = hour * 60 + minute;
+
+  return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
+}
+
+async function storeScreenshot(env, employee, file, requestedFileName, requestedDateKey, origin) {
+  const dateKey = isDateKey(requestedDateKey) ? requestedDateKey : todayKey();
+  const fileName = safeFileName(requestedFileName || file.name, `Screen_${Date.now()}.webp`);
+  const uniqueId = crypto.randomUUID();
+  const storageKey = `shot:${employee.id}:${dateKey}:${Date.now()}:${uniqueId}:${fileName}`;
+  const arrayBuffer = await file.arrayBuffer();
+  const uploadedAt = new Date().toISOString();
+  const contentType = file.type || 'image/webp';
+
+  await env.SCREENSHOTS.put(storageKey, arrayBuffer, {
+    metadata: {
+      fileName,
+      employeeId: employee.id,
+      employeeName: employee.name,
+      email: employee.email,
+      dateKey,
+      contentType,
+      uploadedAt,
+    },
+  });
+
+  try {
+    await env.DB.prepare(`
+      INSERT INTO screenshot_index (
+        id, employee_id, employee_name, email, date_key,
+        file_name, storage_key, content_type, uploaded_at
+      )
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(storage_key)
+      DO UPDATE SET
+        employee_id = excluded.employee_id,
+        employee_name = excluded.employee_name,
+        email = excluded.email,
+        date_key = excluded.date_key,
+        file_name = excluded.file_name,
+        content_type = excluded.content_type,
+        uploaded_at = excluded.uploaded_at
+    `).bind(
+      storageKey,
+      employee.id,
+      employee.name,
+      employee.email,
+      dateKey,
+      fileName,
+      storageKey,
+      contentType,
+      uploadedAt
+    ).run();
+  } catch (error) {
+    await env.SCREENSHOTS.delete(storageKey);
+    throw error;
+  }
+
+  return {
+    fileId: storageKey,
+    fileName,
+    filePath: storageKey,
+    employeeId: employee.id,
+    firstName: employee.first_name || '',
+    lastName: employee.last_name || '',
+    employeeName: employee.name,
+    email: employee.email,
+    monthFolder: dateKey.slice(0, 7),
+    dateKey,
+    localUrl: `${origin}/api/screenshot-file?key=${encodeURIComponent(storageKey)}`,
+  };
 }
 
 
@@ -749,6 +813,32 @@ async function handleApi(
 
 
   // ====================================================
+  // LOGIN BOOTSTRAP DATA
+  // ====================================================
+
+  async function getCaptureSettingsRow() {
+    const row = await env.DB
+      .prepare(`
+        SELECT *
+        FROM capture_settings
+        WHERE id = 1
+      `)
+      .first();
+
+    return {
+      captureMode: row?.capture_mode || 'random_count_window',
+      captureWindowSeconds: Number(row?.capture_window_seconds || 600),
+      screenshotsPerWindow: Number(row?.screenshots_per_window || 5),
+      presetId: row?.preset_id || '10m-5',
+      lockIntervalForEmployees: Boolean(row?.lock_interval_for_employees ?? 1),
+      captureIntervalSeconds: Number(row?.capture_window_seconds || 600),
+      autoCaptureIntervalMinutes: Math.max(1, Math.round(Number(row?.capture_window_seconds || 600) / 60)),
+      allowedIntervals: [10, 60, 120, 300, 600, 900],
+      updatedAt: row?.updated_at || null,
+    };
+  }
+
+  // ====================================================
   // ADMIN LOGIN
   // ====================================================
 
@@ -1047,35 +1137,53 @@ async function handleApi(
       .run();
 
 
+    const [employeesResult, pendingResult, captureSettings] = await Promise.all([
+      env.DB.prepare(`SELECT * FROM employees WHERE approved = 1 ORDER BY created_at DESC`).all(),
+      env.DB.prepare(`SELECT * FROM pending_signups ORDER BY requested_at DESC`).all(),
+      getCaptureSettingsRow(),
+    ]);
+
+    const bootstrapSummary = [];
+    const bootstrapToday = todayKey();
+    const bootstrapMonth = monthKey();
+    for (const employee of employeesResult.results) {
+      const [todayRecord, monthResult, todayScreenshots] = await Promise.all([
+        env.DB.prepare(`SELECT total_seconds FROM tracker_time WHERE employee_id = ? AND date_key = ? LIMIT 1`).bind(employee.id, bootstrapToday).first(),
+        env.DB.prepare(`SELECT COALESCE(SUM(total_seconds), 0) AS total FROM tracker_time WHERE employee_id = ? AND date_key LIKE ?`).bind(employee.id, `${bootstrapMonth}%`).first(),
+        countScreenshots(env, employee.id, bootstrapToday),
+      ]);
+      bootstrapSummary.push({
+        employeeId: employee.id,
+        employeeName: employee.name,
+        firstName: employee.first_name || '',
+        lastName: employee.last_name || '',
+        email: employee.email,
+        today: bootstrapToday,
+        monthKey: bootstrapMonth,
+        todaySeconds: Number(todayRecord?.total_seconds || 0),
+        monthlySeconds: Number(monthResult?.total || 0),
+        todayScreenshots,
+      });
+    }
+
     return json({
       success: true,
-
-      token:
-        sessionToken,
-
+      token: sessionToken,
       expiresAt,
-
       admin: {
-        id:
-          admin.id,
-
-        name:
-          admin.name,
-
-        email:
-          admin.email,
-
-        role:
-          'admin',
-
-        approved:
-          true,
-
-        createdAt:
-          admin.created_at,
-
-        lastActive:
-          now,
+        id: admin.id,
+        name: admin.name,
+        email: admin.email,
+        role: 'admin',
+        approved: true,
+        createdAt: admin.created_at,
+        lastActive: now,
+      },
+      bootstrap: {
+        employees: employeesResult.results.map(employeeToPublic),
+        pending: pendingResult.results.map(pendingToPublic),
+        captureSettings,
+        summary: bootstrapSummary,
       },
     });
   }
@@ -1184,13 +1292,14 @@ async function handleApi(
     }
 
 
+    const captureSettings = await getCaptureSettingsRow();
+
     return json({
       success: true,
-
-      employee:
-        employeeToPublic(
-          employee
-        ),
+      employee: employeeToPublic(employee),
+      bootstrap: {
+        captureSettings,
+      },
     });
   }
 
@@ -2474,10 +2583,6 @@ async function handleApi(
     pathname ===
       '/api/upload-screenshot'
   ) {
-
-    // Hard server-side guard: screenshot uploads are allowed only during
-    // the India tracking window and at most once per hour per employee.
-    // This protects KV/D1 even if an old client keeps sending requests.
     if (!isScreenshotUploadWindowOpen()) {
       return json({
         success: false,
@@ -2485,7 +2590,6 @@ async function handleApi(
         error: 'Screenshot sharing is paused outside 08:30 AM–08:30 PM IST.',
       }, 429);
     }
-
 
     if (
       !env.SCREENSHOTS
@@ -2600,206 +2704,108 @@ async function handleApi(
     }
 
 
-    const latestUpload = await env.DB
-      .prepare(`
-        SELECT uploaded_at
-        FROM screenshot_index
-        WHERE employee_id = ?
-        ORDER BY uploaded_at DESC
-        LIMIT 1
-      `)
-      .bind(employeeId)
-      .first();
-
-    if (latestUpload?.uploaded_at) {
-      const elapsedMs = Date.now() - Date.parse(latestUpload.uploaded_at);
-      if (Number.isFinite(elapsedMs) && elapsedMs < 60 * 60 * 1000) {
-        const retryAfterSeconds = Math.max(1, Math.ceil((60 * 60 * 1000 - elapsedMs) / 1000));
-        return new Response(JSON.stringify({
-          success: false,
-          rateLimited: true,
-          error: 'Screenshot upload is limited to once per hour per employee.',
-          retryAfterSeconds,
-        }), {
-          status: 429,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Retry-After': String(retryAfterSeconds),
-          },
-        });
-      }
-    }
-
-    const dateKey =
-      isDateKey(
-        requestedDateKey
-      )
-        ? requestedDateKey
-        : todayKey();
-
-
-    const fileName =
-      safeFileName(
-        requestedFileName ||
-        file.name,
-
-        `Screen_${Date.now()}.webp`
-      );
-
-
-    const uniqueId =
-      crypto.randomUUID();
-
-
-    const storageKey =
-      `shot:${employee.id}:${dateKey}:${Date.now()}:${uniqueId}:${fileName}`;
-
-
-    const arrayBuffer =
-      await file
-        .arrayBuffer();
-
-
-    const uploadedAt =
-      new Date()
-        .toISOString();
-
-
-    const contentType =
-      file.type ||
-      'image/webp';
-
-
-    // ----------------------------------------------------
-    // Save actual binary image in KV
-    // ----------------------------------------------------
-
-    await env.SCREENSHOTS.put(
-      storageKey,
-      arrayBuffer,
-      {
-        metadata: {
-          fileName,
-
-          employeeId:
-            employee.id,
-
-          employeeName:
-            employee.name,
-
-          email:
-            employee.email,
-
-          dateKey,
-
-          contentType,
-
-          uploadedAt,
-        },
-      }
+    const stored = await storeScreenshot(
+      env,
+      employee,
+      file,
+      requestedFileName,
+      requestedDateKey,
+      url.origin
     );
-
-
-    // ----------------------------------------------------
-    // Save searchable/index metadata in D1
-    // ----------------------------------------------------
-
-    try {
-      await env.DB
-        .prepare(`
-          INSERT INTO screenshot_index (
-            id,
-            employee_id,
-            employee_name,
-            email,
-            date_key,
-            file_name,
-            storage_key,
-            content_type,
-            uploaded_at
-          )
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(storage_key)
-          DO UPDATE SET
-            employee_id = excluded.employee_id,
-            employee_name = excluded.employee_name,
-            email = excluded.email,
-            date_key = excluded.date_key,
-            file_name = excluded.file_name,
-            content_type = excluded.content_type,
-            uploaded_at = excluded.uploaded_at
-        `)
-        .bind(
-          storageKey,
-          employee.id,
-          employee.name,
-          employee.email,
-          dateKey,
-          fileName,
-          storageKey,
-          contentType,
-          uploadedAt
-        )
-        .run();
-
-    } catch (
-      error
-    ) {
-      // Avoid orphan KV files if D1 indexing fails.
-
-      await env.SCREENSHOTS.delete(
-        storageKey
-      );
-
-      throw error;
-    }
-
-
-    const localUrl =
-      `${url.origin}/api/screenshot-file?key=${encodeURIComponent(
-        storageKey
-      )}`;
-
 
     return json({
       success: true,
-
-      fileId:
-        storageKey,
-
-      fileName,
-
-      filePath:
-        storageKey,
-
-      employeeId:
-        employee.id,
-
-      firstName:
-        employee.first_name ||
-        '',
-
-      lastName:
-        employee.last_name ||
-        '',
-
-      employeeName:
-        employee.name,
-
-      email:
-        employee.email,
-
-      monthFolder:
-        dateKey.slice(
-          0,
-          7
-        ),
-
-      dateKey,
-
-      localUrl,
+      ...stored,
     });
+  }
+
+  // ====================================================
+  // SCREENSHOT BATCH UPLOAD - HOURLY QUEUE
+  // ====================================================
+
+  if (
+    method === 'POST' &&
+    pathname === '/api/upload-screenshot-batch'
+  ) {
+    if (!isScreenshotUploadWindowOpen()) {
+      return json({
+        success: false,
+        paused: true,
+        error: 'Screenshot sharing is paused outside 08:30 AM–08:30 PM IST.',
+      }, 429);
+    }
+
+    if (!env.SCREENSHOTS) {
+      return json({
+        success: false,
+        screenshotStorageDisabled: true,
+        error: 'Screenshot KV binding is missing. Add the SCREENSHOTS KV namespace binding in wrangler.jsonc.',
+      }, 501);
+    }
+
+    const form = await request.formData();
+    const files = form.getAll('files').filter((value) => value instanceof File);
+    let metadata = [];
+
+    try {
+      const parsed = JSON.parse(String(form.get('metadata') || '[]'));
+      metadata = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return json({ success: false, error: 'Invalid screenshot batch metadata.' }, 400);
+    }
+
+    if (!files.length || !metadata.length || files.length !== metadata.length) {
+      return json({
+        success: false,
+        error: 'Screenshot batch is empty or metadata does not match the file count.',
+      }, 400);
+    }
+
+    const uploadedIds = [];
+    const failed = [];
+
+    for (let index = 0; index < files.length; index += 1) {
+      const item = metadata[index] || {};
+      const employeeId = String(item.employeeId || '').trim();
+      const queueId = String(item.queueId || '').trim();
+
+      if (!employeeId || !queueId) {
+        failed.push({ queueId, error: 'employeeId and queueId are required.' });
+        continue;
+      }
+
+      const employee = await env.DB
+        .prepare(`SELECT * FROM employees WHERE id = ? LIMIT 1`)
+        .bind(employeeId)
+        .first();
+
+      if (!employee) {
+        failed.push({ queueId, error: 'Employee not found.' });
+        continue;
+      }
+
+      try {
+        await storeScreenshot(
+          env,
+          employee,
+          files[index],
+          String(item.fileName || files[index].name || ''),
+          String(item.dateKey || ''),
+          url.origin
+        );
+        uploadedIds.push(queueId);
+      } catch (error) {
+        failed.push({ queueId, error: error?.message || 'Screenshot upload failed.' });
+      }
+    }
+
+    return json({
+      success: uploadedIds.length > 0 || failed.length === 0,
+      uploadedIds,
+      uploadedCount: uploadedIds.length,
+      failedCount: failed.length,
+      failed,
+    }, uploadedIds.length || failed.length === 0 ? 200 : 500);
   }
 
 

@@ -66,7 +66,7 @@ function aistudioMediaPlugin(): Plugin {
               return;
             }
           } catch {
-            // Continue to Vite
+            // Continue to Vite.
           }
         }
 
@@ -95,7 +95,9 @@ export default defineConfig(({ command }) => {
     fs.existsSync(certPath) && fs.existsSync(keyPath);
 
   return {
-    base: './',
+    // GitHub Pages project URL:
+    // https://webtester976.github.io/workmonitor/
+    base: '/workmonitor/',
 
     plugins: [
       react(),

@@ -11,13 +11,9 @@ const getBackendUrl = (): string => {
     return configured.replace(/\/$/, '');
   }
 
-  // Cloudflare production:
-  // frontend + API are served from the same domain.
-  if (typeof window !== 'undefined') {
-    return window.location.origin;
-  }
-
-  return '';
+  // GitHub Pages frontend uses the Cloudflare Worker only for the
+  // small set of API calls that are actually required.
+  return 'https://codesdot-workmonitor.work-nest.workers.dev';
 };
 
 // ======================================================
