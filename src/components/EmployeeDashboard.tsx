@@ -398,10 +398,19 @@ export const EmployeeDashboard:
   const daySecondsRef =
     useRef(0);
 
+  // When a tracking session survives a page refresh, keep the saved
+  // session duration so the next Start action resumes it instead of
+  // resetting the current task to zero.
+  const restoredSessionRef =
+    useRef(false);
+
   const captureWindowRef =
     useRef(
       captureWindowSeconds
     );
+
+  const capturePolicyRefreshAtRef =
+    useRef(0);
 
   const screenshotCountRef =
     useRef(
@@ -515,13 +524,24 @@ export const EmployeeDashboard:
           ?.sessionSeconds ===
         'number'
       ) {
-        setSessionSeconds(
-          Math.max(
-            0,
-            saved
-              .sessionSeconds
-          )
+        const restoredSessionSeconds = Math.max(
+          0,
+          saved.sessionSeconds
         );
+
+        setSessionSeconds(
+          restoredSessionSeconds
+        );
+
+        if (
+          saved?.isTracking &&
+          restoredSessionSeconds > 0
+        ) {
+          restoredSessionRef.current = true;
+          setLastStatus(
+            'Previous tracking time restored. Click Start Tracking to continue.'
+          );
+        }
       }
 
       if (
@@ -675,7 +695,7 @@ export const EmployeeDashboard:
                 1
             );
           },
-          60000
+          1000
         );
     } else {
       if (
@@ -1434,6 +1454,136 @@ export const EmployeeDashboard:
     };
 
   // ====================================================
+  // CAPTURE POLICY REFRESH (FOCUS/VISIBILITY ONLY)
+  // ====================================================
+  // Admin changes are picked up when the employee returns to the tab.
+  // There is deliberately no interval polling.
+  const refreshCapturePolicy = async () => {
+    const now = Date.now();
+
+    // Focus + visibilitychange can fire together. Avoid duplicate
+    // requests while still picking up admin changes quickly.
+    if (
+      now -
+        capturePolicyRefreshAtRef.current <
+      30000
+    ) {
+      return;
+    }
+
+    capturePolicyRefreshAtRef.current = now;
+
+    try {
+      const response = await fetch(
+        `${backendUrl}/api/capture-settings`,
+        {
+          cache: 'no-store',
+          headers: backendHeaders,
+        }
+      );
+
+      const data = await readApiJson(response);
+
+      if (
+        !response.ok ||
+        !data?.success ||
+        !data?.settings
+      ) {
+        return;
+      }
+
+      const settings = data.settings;
+      const newWindow = Math.max(
+        5,
+        Number(
+          settings.captureWindowSeconds ||
+          settings.captureIntervalSeconds ||
+          600
+        )
+      );
+      const newCount = Math.max(
+        1,
+        Number(settings.screenshotsPerWindow || 5)
+      );
+      const newPreset = String(
+        settings.presetId || 'custom'
+      );
+      const newUpdatedAt = String(
+        settings.updatedAt || ''
+      );
+
+      const changed =
+        newWindow !== captureWindowRef.current ||
+        newCount !== screenshotCountRef.current ||
+        newPreset !== capturePresetId ||
+        newUpdatedAt !== centralPolicyUpdatedAt;
+
+      setCaptureWindowSeconds(newWindow);
+      setScreenshotsPerWindow(newCount);
+      setCapturePresetId(newPreset);
+      setCentralPolicyUpdatedAt(newUpdatedAt);
+
+      captureWindowRef.current = newWindow;
+      screenshotCountRef.current = newCount;
+
+      if (
+        changed &&
+        trackingRef.current &&
+        !pausedRef.current
+      ) {
+        scheduleRandomWindow(
+          newWindow,
+          newCount
+        );
+      }
+
+      try {
+        localStorage.setItem(
+          'workmonitor_employee_capture_settings',
+          JSON.stringify(settings)
+        );
+      } catch {
+        // ignore local cache errors
+      }
+    } catch (error) {
+      console.warn(
+        'Capture policy refresh warning:',
+        error
+      );
+    }
+  };
+
+  useEffect(() => {
+    const handleVisibilityOrFocus = () => {
+      if (
+        document.visibilityState === 'visible'
+      ) {
+        void refreshCapturePolicy();
+      }
+    };
+
+    window.addEventListener(
+      'focus',
+      handleVisibilityOrFocus
+    );
+    document.addEventListener(
+      'visibilitychange',
+      handleVisibilityOrFocus
+    );
+
+    return () => {
+      window.removeEventListener(
+        'focus',
+        handleVisibilityOrFocus
+      );
+      document.removeEventListener(
+        'visibilitychange',
+        handleVisibilityOrFocus
+      );
+    };
+  }, [backendUrl, capturePresetId, centralPolicyUpdatedAt]);
+
+  // ====================================================
   // HOURLY CLOUD UPLOAD QUEUE
   // ====================================================
 
@@ -1700,7 +1850,21 @@ export const EmployeeDashboard:
       }
     };
 
-  // History is loaded only when the user explicitly opens/refreshes it.
+  // Restore history and local screenshots once when the dashboard opens.
+  // This is intentionally a one-time load (no polling) so refreshes restore
+  // saved screenshots without recreating the old request explosion.
+  const initialHistoryLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (
+      initialHistoryLoadedRef.current
+    ) {
+      return;
+    }
+
+    initialHistoryLoadedRef.current = true;
+    void loadDateHistory();
+  }, [currentUser.id]);
 
   // ====================================================
   // MERGE SCREENSHOTS
@@ -1951,9 +2115,11 @@ export const EmployeeDashboard:
         false
       );
 
-      setSessionSeconds(
-        0
-      );
+      if (restoredSessionRef.current) {
+        restoredSessionRef.current = false;
+      } else {
+        setSessionSeconds(0);
+      }
 
       setLastStatus(
         '✅ Tracking started'
@@ -2073,6 +2239,8 @@ export const EmployeeDashboard:
       setSessionSeconds(
         0
       );
+
+      restoredSessionRef.current = false;
 
       setLastStatus(
         `Tracking stopped. Today: ${formatSecondsToHoursMinutes(
