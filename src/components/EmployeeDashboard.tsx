@@ -389,6 +389,12 @@ export const EmployeeDashboard:
       number | null
     >(null);
 
+  // Central D1 tracker sync runs only once per minute while actively tracking.
+  const trackerSyncIntervalRef =
+    useRef<
+      number | null
+    >(null);
+
   const trackingRef =
     useRef(false);
 
@@ -717,6 +723,66 @@ export const EmployeeDashboard:
         clearInterval(
           trackerTimerRef.current
         );
+      }
+    };
+  }, [
+    isTracking,
+    isPaused,
+  ]);
+
+  // ====================================================
+  // PERIODIC CENTRAL TRACKER SYNC
+  // ====================================================
+  // Keep Cloudflare D1 updated while the employee is working.
+  // This runs once every 60 seconds only while actively tracking.
+  // It does not poll while paused or stopped.
+
+  useEffect(() => {
+    if (
+      !isTracking ||
+      isPaused
+    ) {
+      if (
+        trackerSyncIntervalRef.current !== null
+      ) {
+        window.clearInterval(
+          trackerSyncIntervalRef.current
+        );
+
+        trackerSyncIntervalRef.current =
+          null;
+      }
+
+      return;
+    }
+
+    // The Start action already performs the initial sync.
+    // The interval handles subsequent updates.
+    trackerSyncIntervalRef.current =
+      window.setInterval(
+        () => {
+          if (
+            trackingRef.current &&
+            !pausedRef.current
+          ) {
+            void syncTrackerTime(
+              daySecondsRef.current
+            );
+          }
+        },
+        60 * 1000
+      );
+
+    return () => {
+      if (
+        trackerSyncIntervalRef.current !== null
+      ) {
+        window.clearInterval(
+          trackerSyncIntervalRef.current
+        );
+
+        trackerSyncIntervalRef.current =
+          null;
       }
     };
   }, [
@@ -2266,6 +2332,17 @@ export const EmployeeDashboard:
         clearInterval(
           trackerTimerRef.current
         );
+      }
+
+      if (
+        trackerSyncIntervalRef.current !== null
+      ) {
+        window.clearInterval(
+          trackerSyncIntervalRef.current
+        );
+
+        trackerSyncIntervalRef.current =
+          null;
       }
 
       if (
