@@ -638,7 +638,6 @@ React.FC<AdminDashboardProps> = ({
       );
     };
 
-
   /* ==========================================================================
      LOAD SUMMARY
   ========================================================================== */
@@ -879,6 +878,65 @@ React.FC<AdminDashboardProps> = ({
 
   // No automatic admin polling. Fresh data is requested only after explicit
   // admin actions or when the admin manually refreshes a section.
+
+
+  /* ==========================================================================
+     INITIAL PENDING APPROVALS LOAD
+  ========================================================================== */
+
+  // Login bootstrap provides the initial UI immediately.
+  // Fetch the latest pending signup requests once when the admin dashboard
+  // opens. This is NOT polling. It ensures a signup submitted after the
+  // admin logged in appears without requiring logout/login.
+  useEffect(() => {
+    let cancelled = false;
+
+    const loadInitialPending = async () => {
+      try {
+        const response = await apiFetch(
+          '/api/pending-employees',
+          {
+            method: 'GET',
+            cache: 'no-store',
+          }
+        );
+
+        const data = await readApiJson(response);
+
+        if (!response.ok || !data?.success) {
+          throw new Error(
+            data?.error ||
+            'Failed to load pending requests'
+          );
+        }
+
+        if (cancelled) {
+          return;
+        }
+
+        const pending =
+          Array.isArray(data.pending)
+            ? data.pending
+            : [];
+
+        setCentralPending(pending);
+        onUpdatePendingSignups(pending);
+      } catch (error) {
+        if (!cancelled) {
+          console.error(
+            'Initial pending signup refresh failed:',
+            error
+          );
+        }
+      }
+    };
+
+    void loadInitialPending();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
 
   /* ==========================================================================
