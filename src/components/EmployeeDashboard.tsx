@@ -1033,36 +1033,6 @@ export const EmployeeDashboard:
         const fileName =
           `Screen_${dateKey}_${safeTime}.${extension}`;
 
-        // Ensure folder
-        try {
-          await fetch(
-            `${backendUrl}/api/provision-employee`,
-            {
-              method:
-                'POST',
-
-              headers: {
-                ...backendHeaders,
-                'Content-Type':
-                  'application/json',
-              },
-
-              body:
-                JSON.stringify({
-                  employeeId:
-                    currentUser.id,
-
-                  employeeName:
-                    currentUser.name,
-
-                  dateKey,
-                }),
-            }
-          );
-        } catch {
-          // continue upload
-        }
-
         const result =
           await uploadScreenshotLocally(
             blob,
@@ -1153,13 +1123,9 @@ export const EmployeeDashboard:
           }`
         );
 
-        // Refresh selected date after upload
-        if (
-          selectedDate ===
-          dateKey
-        ) {
-          await loadDateHistory();
-        }
+        // Do not reload cloud history after every screenshot.
+        // The screenshot is already added to the local UI via onNewScreenshot().
+        // History is fetched only when the user explicitly opens/refreshes it.
       } catch (
         error: any
       ) {
@@ -1880,27 +1846,21 @@ export const EmployeeDashboard:
   };
 
   // ====================================================
-  // NGROK-SAFE EMPLOYEE SCREENSHOT BLOBS
+  // EMPLOYEE SCREENSHOT IMAGE LOADING
   // ====================================================
+  // Only fetch a screenshot image once per source URL.
+  // Previously this effect refetched EVERY existing screenshot whenever
+  // mergedScreenshots changed. Because a new screenshot changed that array,
+  // one new screenshot could trigger hundreds of old image requests again.
+  const employeeScreenshotUrlCacheRef =
+    useRef<Record<string, string>>({});
 
   useEffect(() => {
     let cancelled = false;
 
-    setEmployeeScreenshotUrls((previous) => {
-      Object.values(previous).forEach((url) => {
-        if (url.startsWith('blob:')) URL.revokeObjectURL(url);
-      });
-      return {};
-    });
-
-    if (!mergedScreenshots.length) {
-      return () => {
-        cancelled = true;
-      };
-    }
-
     const loadImages = async () => {
       const loaded: Record<string, string> = {};
+      const cache = employeeScreenshotUrlCacheRef.current;
 
       for (const screenshot of mergedScreenshots) {
         const source =
@@ -1910,16 +1870,23 @@ export const EmployeeDashboard:
 
         if (!source || cancelled) continue;
 
-        // Fresh in-browser captures are already data URLs.
+        // Fresh in-browser captures are already data/blob URLs.
         if (source.startsWith('data:') || source.startsWith('blob:')) {
           loaded[source] = source;
+          continue;
+        }
+
+        // Reuse an already-loaded cloud image instead of fetching it again.
+        const cachedUrl = cache[source];
+        if (cachedUrl) {
+          loaded[source] = cachedUrl;
           continue;
         }
 
         try {
           const response = await fetch(source, {
             method: 'GET',
-            cache: 'no-store',
+            cache: 'force-cache',
             headers: {
               'ngrok-skip-browser-warning': 'true',
             },
@@ -1932,7 +1899,9 @@ export const EmployeeDashboard:
           const blob = await response.blob();
           if (cancelled) return;
 
-          loaded[source] = URL.createObjectURL(blob);
+          const objectUrl = URL.createObjectURL(blob);
+          cache[source] = objectUrl;
+          loaded[source] = objectUrl;
         } catch (error) {
           console.error(
             'Employee screenshot load failed:',
@@ -1944,10 +1913,6 @@ export const EmployeeDashboard:
 
       if (!cancelled) {
         setEmployeeScreenshotUrls(loaded);
-      } else {
-        Object.values(loaded).forEach((url) => {
-          if (url.startsWith('blob:')) URL.revokeObjectURL(url);
-        });
       }
     };
 
