@@ -196,13 +196,6 @@ const releaseFlushLock = (): void => {
   window.localStorage.removeItem(FLUSH_LOCK_KEY);
 };
 
-/* ========================================================================== 
-   NGROK / COMPATIBILITY HEADERS
-========================================================================== */
-
-const getNgrokHeaders = (): Record<string, string> => ({
-  'ngrok-skip-browser-warning': 'true',
-});
 
 /* ========================================================================== 
    SAVE SCREENSHOT LOCALLY
@@ -293,7 +286,6 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
       const response = await fetch(`${backendUrl}/api/upload-screenshot-batch`, {
         method: 'POST',
         headers: {
-          ...getNgrokHeaders(),
         },
         body: formData,
       });
@@ -376,7 +368,6 @@ export async function getLocalScreenshots(
       method: 'GET',
       cache: 'no-store',
       headers: {
-        ...getNgrokHeaders(),
       },
     }
   );
@@ -403,7 +394,6 @@ export async function deleteLocalScreenshot(filePath: string): Promise<void> {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
-      ...getNgrokHeaders(),
     },
     body: JSON.stringify({ filePath }),
   });
@@ -417,3 +407,5 @@ export async function deleteLocalScreenshot(filePath: string): Promise<void> {
 export function getLocalBackendUrl(): string {
   return getBackendUrl();
 }
+
+

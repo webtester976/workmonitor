@@ -187,15 +187,6 @@ export const EmployeeDashboard:
       []
     );
 
-  const backendHeaders =
-    useMemo(
-      () => ({
-        'ngrok-skip-browser-warning':
-          'true',
-      }),
-      []
-    );
-
   // ====================================================
   // TRACKER
   // ====================================================
@@ -615,7 +606,6 @@ export const EmployeeDashboard:
                 'POST',
 
               headers: {
-                ...backendHeaders,
                 'Content-Type':
                   'application/json',
               },
@@ -1544,7 +1534,6 @@ export const EmployeeDashboard:
         `${backendUrl}/api/capture-settings`,
         {
           cache: 'no-store',
-          headers: backendHeaders,
         }
       );
 
@@ -1687,8 +1676,6 @@ export const EmployeeDashboard:
               {
                 cache:
                   'no-store',
-                headers:
-                  backendHeaders,
               }
             ),
 
@@ -1701,8 +1688,6 @@ export const EmployeeDashboard:
               {
                 cache:
                   'no-store',
-                headers:
-                  backendHeaders,
               }
             ),
           ]);
@@ -2117,9 +2102,6 @@ export const EmployeeDashboard:
           const response = await fetch(source, {
             method: 'GET',
             cache: 'force-cache',
-            headers: {
-              'ngrok-skip-browser-warning': 'true',
-            },
           });
 
           if (!response.ok) {
