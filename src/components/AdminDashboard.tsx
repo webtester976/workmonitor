@@ -74,6 +74,7 @@ type ActivitySummaryRow = {
   todaySeconds: number;
   monthlySeconds: number;
   todayScreenshots: number;
+  trackerEvents?: Array<{ id: string; eventType: string; eventAt: string; dateKey: string }>;
 };
 
 
@@ -2068,6 +2069,13 @@ React.FC<AdminDashboardProps> = ({
                   text-left
                   p-4
                 ">
+                  Tracker Events (Today, IST)
+                </th>
+
+                <th className="
+                  text-left
+                  p-4
+                ">
                   Today Screenshots
                 </th>
 
@@ -2152,6 +2160,22 @@ React.FC<AdminDashboardProps> = ({
                         )}
                       </td>
 
+                      <td className="p-4 min-w-[220px]">
+                        <div className="space-y-1 text-xs">
+                          {(summary?.trackerEvents || []).length === 0 ? (
+                            <span className="text-slate-400">No events yet</span>
+                          ) : (summary?.trackerEvents || []).map((event) => (
+                            <div key={event.id} className="flex gap-2">
+                              <span className="font-semibold capitalize">{event.eventType}</span>
+                              <span className="text-slate-500">
+                                {new Date(event.eventAt).toLocaleTimeString('en-IN', {
+                                  timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+                                })}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </td>
 
                       <td className="
                         p-4
