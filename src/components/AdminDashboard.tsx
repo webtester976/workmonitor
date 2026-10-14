@@ -877,8 +877,21 @@ React.FC<AdminDashboardProps> = ({
      INITIAL ADMIN LOAD
   ========================================================================== */
 
-  // No automatic admin polling. Fresh data is requested only after explicit
-  // admin actions or when the admin manually refreshes a section.
+  // Refresh the activity summary once per minute while the Admin dashboard
+  // is open. This is one lightweight request per minute and lets the Admin
+  // see employee timer syncs without logging out or manually refreshing.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void loadSummary().catch((error) => {
+        console.warn('Admin activity summary refresh failed:', error);
+      });
+    }, 60 * 1000);
+
+    return () => window.clearInterval(timer);
+    // loadSummary is recreated on render; this timer intentionally uses the
+    // stable dashboard lifetime and reads the latest API data on each tick.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
 
   /* ==========================================================================
