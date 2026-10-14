@@ -187,13 +187,6 @@ export const EmployeeDashboard:
       []
     );
 
-  const backendHeaders =
-    useMemo(
-      () => ({
-      }),
-      []
-    );
-
   // ====================================================
   // TRACKER
   // ====================================================
@@ -542,6 +535,7 @@ export const EmployeeDashboard:
           restoredSessionSeconds > 0
         ) {
           restoredSessionRef.current = true;
+          void logTrackerEvent('session_restored');
           setLastStatus(
             'Previous tracking time restored. Click Start Tracking to continue.'
           );
@@ -613,7 +607,6 @@ export const EmployeeDashboard:
                 'POST',
 
               headers: {
-                ...backendHeaders,
                 'Content-Type':
                   'application/json',
               },
@@ -1195,15 +1188,6 @@ export const EmployeeDashboard:
           log
         );
 
-        // Update the visible selected-date count immediately for this local
-        // capture. The IndexedDB queue is not counted by the Worker until the
-        // hourly batch upload succeeds.
-        if (selectedDate === dateKey) {
-          setSelectedDateScreenshotCount(
-            (previous) => previous + 1
-          );
-        }
-
         setLastCapturedTime(
           timeFormatted
         );
@@ -1551,7 +1535,6 @@ export const EmployeeDashboard:
         `${backendUrl}/api/capture-settings`,
         {
           cache: 'no-store',
-          headers: backendHeaders,
         }
       );
 
@@ -1680,9 +1663,6 @@ export const EmployeeDashboard:
       setLoadingHistory(
         true
       );
-      // Reset the selected-date count before loading a different date so an
-      // older date's screenshot count is not carried into the new selection.
-      setSelectedDateScreenshotCount(0);
 
       try {
         const [
@@ -1697,8 +1677,6 @@ export const EmployeeDashboard:
               {
                 cache:
                   'no-store',
-                headers:
-                  backendHeaders,
               }
             ),
 
@@ -1711,8 +1689,6 @@ export const EmployeeDashboard:
               {
                 cache:
                   'no-store',
-                headers:
-                  backendHeaders,
               }
             ),
           ]);
@@ -1912,13 +1888,6 @@ export const EmployeeDashboard:
         setRestoredScreenshots(
           restored
         );
-
-        // The API count includes centrally uploaded screenshots only. Also
-        // count locally queued screenshots so the employee sees captures
-        // before their next hourly upload.
-        setSelectedDateScreenshotCount(
-          (currentCount) => Math.max(currentCount, restored.length)
-        );
       } catch (
         error
       ) {
@@ -1933,15 +1902,21 @@ export const EmployeeDashboard:
       }
     };
 
-  // Load history when the dashboard opens and when the employee selects a
-  // different date. This is event-driven, not polling, so it avoids repeated
-  // Worker requests while keeping the selected date's history accurate.
+  // Restore history and local screenshots once when the dashboard opens.
+  // This is intentionally a one-time load (no polling) so refreshes restore
+  // saved screenshots without recreating the old request explosion.
+  const initialHistoryLoadedRef = useRef(false);
+
   useEffect(() => {
+    if (
+      initialHistoryLoadedRef.current
+    ) {
+      return;
+    }
+
+    initialHistoryLoadedRef.current = true;
     void loadDateHistory();
-    // loadDateHistory is intentionally omitted because it is recreated on
-    // render; the stable triggers are the user ID and selected date.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser.id, selectedDate]);
+  }, [currentUser.id]);
 
   // ====================================================
   // MERGE SCREENSHOTS
@@ -2143,16 +2118,11 @@ export const EmployeeDashboard:
           cache[source] = objectUrl;
           loaded[source] = objectUrl;
         } catch (error) {
-          // Keep a direct image URL as a fallback. Cross-origin <img> can
-          // display images even when fetch() -> Blob is blocked by CORS.
-          // This avoids a blank Employee Screenshot History when Admin can
-          // already see the same uploaded screenshot.
-          console.warn(
-            'Employee screenshot fetch failed; using direct image URL:',
+          console.error(
+            'Employee screenshot load failed:',
             screenshot.driveFileId,
             error
           );
-          loaded[source] = source;
         }
       }
 
@@ -2167,6 +2137,44 @@ export const EmployeeDashboard:
       cancelled = true;
     };
   }, [mergedScreenshots]);
+
+  // Persist tracker lifecycle events to the Worker. This is deliberately
+  // separate from the timer total so refresh/restore never masquerade as Stop.
+  const logTrackerEvent = async (
+    eventType: 'start' | 'pause' | 'resume' | 'stop' | 'page_refresh' | 'session_restored',
+    keepalive = false
+  ) => {
+    try {
+      const response = await fetch(`${backendUrl}/api/tracker-event`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          employeeId: currentUser.id,
+          employeeName: currentUser.name,
+          eventType,
+        }),
+        keepalive,
+      });
+      const data = await readApiJson(response);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || `Could not save ${eventType}`);
+      }
+    } catch (error) {
+      // Event logging must never prevent the local timer/screenshots from working.
+      console.warn(`Tracker event sync failed (${eventType}):`, error);
+    }
+  };
+
+  // Record browser refresh/navigation separately. Do not label it as Stop.
+  useEffect(() => {
+    const handlePageHide = () => {
+      void logTrackerEvent('page_refresh', true);
+    };
+    window.addEventListener('pagehide', handlePageHide);
+    return () => window.removeEventListener('pagehide', handlePageHide);
+    // One listener per employee dashboard mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.id, backendUrl]);
 
   // ====================================================
   // START
@@ -2206,6 +2214,7 @@ export const EmployeeDashboard:
         '✅ Tracking started'
       );
 
+      await logTrackerEvent('start');
       await syncTrackerTime();
 
       scheduleRandomWindow(
@@ -2234,6 +2243,7 @@ export const EmployeeDashboard:
         null
       );
 
+      await logTrackerEvent('pause');
       await syncTrackerTime();
 
       setLastStatus(
@@ -2260,6 +2270,7 @@ export const EmployeeDashboard:
         screenshotCountRef.current
       );
 
+      void logTrackerEvent('resume');
       setLastStatus(
         'Tracking resumed'
       );
@@ -2272,6 +2283,7 @@ export const EmployeeDashboard:
   const stopTracking =
     async () => {
 
+      await logTrackerEvent('stop');
       await syncTrackerTime();
 
       trackingRef.current =
