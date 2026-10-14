@@ -1182,6 +1182,9 @@ async function handleApi(
         todaySeconds: Number(todayRecord?.total_seconds || 0),
         monthlySeconds: Number(monthResult?.total || 0),
         todayScreenshots,
+
+        // Include lifecycle events in the response consumed by AdminDashboard.
+        trackerEvents,
       });
     }
 
