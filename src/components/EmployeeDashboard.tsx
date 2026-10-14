@@ -1197,6 +1197,15 @@ export const EmployeeDashboard:
           log
         );
 
+        // Update the visible selected-date count immediately for this local
+        // capture. The IndexedDB queue is not counted by the Worker until the
+        // hourly batch upload succeeds.
+        if (selectedDate === dateKey) {
+          setSelectedDateScreenshotCount(
+            (previous) => previous + 1
+          );
+        }
+
         setLastCapturedTime(
           timeFormatted
         );
@@ -1673,6 +1682,9 @@ export const EmployeeDashboard:
       setLoadingHistory(
         true
       );
+      // Reset the selected-date count before loading a different date so an
+      // older date's screenshot count is not carried into the new selection.
+      setSelectedDateScreenshotCount(0);
 
       try {
         const [
@@ -1902,6 +1914,13 @@ export const EmployeeDashboard:
         setRestoredScreenshots(
           restored
         );
+
+        // The API count includes centrally uploaded screenshots only. Also
+        // count locally queued screenshots so the employee sees captures
+        // before their next hourly upload.
+        setSelectedDateScreenshotCount(
+          (currentCount) => Math.max(currentCount, restored.length)
+        );
       } catch (
         error
       ) {
@@ -1916,21 +1935,15 @@ export const EmployeeDashboard:
       }
     };
 
-  // Restore history and local screenshots once when the dashboard opens.
-  // This is intentionally a one-time load (no polling) so refreshes restore
-  // saved screenshots without recreating the old request explosion.
-  const initialHistoryLoadedRef = useRef(false);
-
+  // Load history when the dashboard opens and when the employee selects a
+  // different date. This is event-driven, not polling, so it avoids repeated
+  // Worker requests while keeping the selected date's history accurate.
   useEffect(() => {
-    if (
-      initialHistoryLoadedRef.current
-    ) {
-      return;
-    }
-
-    initialHistoryLoadedRef.current = true;
     void loadDateHistory();
-  }, [currentUser.id]);
+    // loadDateHistory is intentionally omitted because it is recreated on
+    // render; the stable triggers are the user ID and selected date.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.id, selectedDate]);
 
   // ====================================================
   // MERGE SCREENSHOTS
