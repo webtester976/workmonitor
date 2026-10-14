@@ -3,7 +3,7 @@ function json(data, status = 200) {
     status,
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, ngrok-skip-browser-warning',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     },
   });
@@ -294,7 +294,7 @@ async function handleApi(
             '*',
 
           'Access-Control-Allow-Headers':
-            'Content-Type, Authorization, ngrok-skip-browser-warning',
+            'Content-Type, Authorization',
 
           'Access-Control-Allow-Methods':
             'GET, POST, PUT, PATCH, DELETE, OPTIONS',
@@ -1515,7 +1515,7 @@ async function handleApi(
     const body = await parseBody(request);
     const employeeId = String(body.employeeId || '');
     const eventType = String(body.eventType || '').toLowerCase();
-    const allowedEvents = new Set(['start', 'pause', 'resume', 'stop']);
+    const allowedEvents = new Set(['start', 'pause', 'resume', 'stop', 'page_refresh', 'session_restored']);
     if (!employeeId) return json({ success: false, error: 'employeeId is required.' }, 400);
     if (!allowedEvents.has(eventType)) return json({ success: false, error: 'Invalid eventType.' }, 400);
 
@@ -2325,7 +2325,7 @@ async function handleApi(
         FROM tracker_events
         WHERE employee_id = ? AND date_key = ?
         ORDER BY event_at ASC
-      `).bind(employee.id, today).all();
+      `).bind(employee.id, indiaDateKey()).all();
       const trackerEvents = (eventResult.results || []).map((event) => ({
         id: event.id,
         eventType: event.event_type,
