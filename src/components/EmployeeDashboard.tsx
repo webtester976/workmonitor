@@ -534,20 +534,10 @@ export const EmployeeDashboard:
           saved?.isTracking &&
           restoredSessionSeconds > 0
         ) {
-          // Resume the elapsed-time counter after a browser refresh. Browser
-          // security does not allow screen sharing to be re-opened silently,
-          // so screenshot capture must be re-authorized by the employee.
           restoredSessionRef.current = true;
-          const wasPaused = saved?.isPaused === true;
-          trackingRef.current = true;
-          pausedRef.current = wasPaused;
-          setIsTracking(true);
-          setIsPaused(wasPaused);
           void logTrackerEvent('session_restored');
           setLastStatus(
-            wasPaused
-              ? 'Previous session restored in PAUSED state.'
-              : 'Timer resumed after refresh. Re-enable screen sharing to resume screenshots.'
+            'Previous tracking time restored. Click Start Tracking to continue.'
           );
         }
       }
@@ -2178,10 +2168,7 @@ export const EmployeeDashboard:
   // Record browser refresh/navigation separately. Do not label it as Stop.
   useEffect(() => {
     const handlePageHide = () => {
-      // Only record a refresh/navigation event when tracking was actually on.
-      if (trackingRef.current) {
-        void logTrackerEvent('page_refresh', true);
-      }
+      void logTrackerEvent('page_refresh', true);
     };
     window.addEventListener('pagehide', handlePageHide);
     return () => window.removeEventListener('pagehide', handlePageHide);
