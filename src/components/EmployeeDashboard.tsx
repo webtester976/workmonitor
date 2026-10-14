@@ -395,6 +395,11 @@ export const EmployeeDashboard:
   const daySecondsRef =
     useRef(0);
 
+  // Wall-clock anchor prevents interval throttling in background tabs from
+  // making tracked time run slow. Each tick adds actual elapsed whole seconds.
+  const lastTickAtRef =
+    useRef<number | null>(null);
+
   // When a tracking session survives a page refresh, keep the saved
   // session duration so the next Start action resumes it instead of
   // resetting the current task to zero.
@@ -663,62 +668,78 @@ export const EmployeeDashboard:
       }
     };
 
+  // Save explicit tracker actions to Cloudflare so Admin can see every
+  // Start / Pause / Resume / Stop timestamp for the employee's IST day.
+  const logTrackerEvent = async (
+    eventType: 'start' | 'pause' | 'resume' | 'stop'
+  ) => {
+    try {
+      const response = await fetch(
+        `${backendUrl}/api/tracker-event`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employeeId: currentUser.id,
+            employeeName: currentUser.name,
+            eventType,
+          }),
+        }
+      );
+      const data = await readApiJson(response);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'Tracker event save failed');
+      }
+    } catch (error) {
+      console.error(`Could not save tracker event (${eventType}):`, error);
+      setLastStatus(`Warning: ${eventType} timestamp could not be synced to Admin. Check network and retry.`);
+    }
+  };
+
+  // Apply elapsed time from the wall clock rather than assuming every interval
+  // callback ran exactly once per second. Safe to call before pause/stop too.
+  const flushElapsedTrackerTime = () => {
+    const lastTick = lastTickAtRef.current;
+    if (lastTick === null || !trackingRef.current || pausedRef.current) return;
+    const now = Date.now();
+    const elapsedSeconds = Math.floor((now - lastTick) / 1000);
+    if (elapsedSeconds <= 0) return;
+    lastTickAtRef.current = lastTick + elapsedSeconds * 1000;
+    setSessionSeconds((previous) => previous + elapsedSeconds);
+    const nextDaySeconds = daySecondsRef.current + elapsedSeconds;
+    daySecondsRef.current = nextDaySeconds;
+    setDayTotalSeconds(nextDaySeconds);
+  };
+
   // ====================================================
   // TIMER
   // ====================================================
 
   useEffect(() => {
-    if (
-      isTracking &&
-      !isPaused
-    ) {
-      trackerTimerRef.current =
-        window.setInterval(
-          () => {
-            setSessionSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
-
-            setDayTotalSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
-          },
-          1000
-        );
+    if (isTracking && !isPaused) {
+      if (lastTickAtRef.current === null) {
+        lastTickAtRef.current = Date.now();
+      }
+      trackerTimerRef.current = window.setInterval(() => {
+        flushElapsedTrackerTime();
+      }, 1000);
     } else {
-      if (
-        trackerTimerRef.current
-      ) {
-        clearInterval(
-          trackerTimerRef.current
-        );
-
-        trackerTimerRef.current =
-          null;
+      if (trackerTimerRef.current !== null) {
+        clearInterval(trackerTimerRef.current);
+        trackerTimerRef.current = null;
+      }
+      if (!isTracking || isPaused) {
+        lastTickAtRef.current = null;
       }
     }
 
     return () => {
-      if (
-        trackerTimerRef.current
-      ) {
-        clearInterval(
-          trackerTimerRef.current
-        );
+      if (trackerTimerRef.current !== null) {
+        clearInterval(trackerTimerRef.current);
+        trackerTimerRef.current = null;
       }
     };
-  }, [
-    isTracking,
-    isPaused,
-  ]);
+  }, [isTracking, isPaused]);
 
   // ====================================================
   // PERIODIC CENTRAL TRACKER SYNC
@@ -2154,6 +2175,7 @@ export const EmployeeDashboard:
 
       pausedRef.current =
         false;
+      lastTickAtRef.current = Date.now();
 
       setIsTracking(
         true
@@ -2173,7 +2195,8 @@ export const EmployeeDashboard:
         '✅ Tracking started'
       );
 
-      await syncTrackerTime();
+      await logTrackerEvent('start');
+      await syncTrackerTime(daySecondsRef.current);
 
       scheduleRandomWindow(
         captureWindowRef.current,
@@ -2188,8 +2211,10 @@ export const EmployeeDashboard:
   const pauseTracking =
     async () => {
 
+      flushElapsedTrackerTime();
       pausedRef.current =
         true;
+      lastTickAtRef.current = null;
 
       setIsPaused(
         true
@@ -2201,7 +2226,8 @@ export const EmployeeDashboard:
         null
       );
 
-      await syncTrackerTime();
+      await syncTrackerTime(daySecondsRef.current);
+      await logTrackerEvent('pause');
 
       setLastStatus(
         'Tracking paused'
@@ -2217,6 +2243,7 @@ export const EmployeeDashboard:
 
       pausedRef.current =
         false;
+      lastTickAtRef.current = Date.now();
 
       setIsPaused(
         false
@@ -2227,6 +2254,7 @@ export const EmployeeDashboard:
         screenshotCountRef.current
       );
 
+      void logTrackerEvent('resume');
       setLastStatus(
         'Tracking resumed'
       );
@@ -2239,10 +2267,13 @@ export const EmployeeDashboard:
   const stopTracking =
     async () => {
 
-      await syncTrackerTime();
+      flushElapsedTrackerTime();
+      await syncTrackerTime(daySecondsRef.current);
+      await logTrackerEvent('stop');
 
       trackingRef.current =
         false;
+      lastTickAtRef.current = null;
 
       pausedRef.current =
         false;
