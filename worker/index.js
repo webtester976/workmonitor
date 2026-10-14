@@ -1163,14 +1163,24 @@ async function handleApi(
     ]);
 
     const bootstrapSummary = [];
-    const bootstrapToday = todayKey();
-    const bootstrapMonth = monthKey();
+    // Ensure the event table exists before the first admin bootstrap response.
+    await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
+    // Use India-local dates consistently; UTC dates can differ from IST near midnight.
+    const bootstrapToday = indiaDateKey();
+    const bootstrapMonth = bootstrapToday.slice(0, 7);
     for (const employee of employeesResult.results) {
-      const [todayRecord, monthResult, todayScreenshots] = await Promise.all([
+      const [todayRecord, monthResult, todayScreenshots, eventResult] = await Promise.all([
         env.DB.prepare(`SELECT total_seconds FROM tracker_time WHERE employee_id = ? AND date_key = ? LIMIT 1`).bind(employee.id, bootstrapToday).first(),
         env.DB.prepare(`SELECT COALESCE(SUM(total_seconds), 0) AS total FROM tracker_time WHERE employee_id = ? AND date_key LIKE ?`).bind(employee.id, `${bootstrapMonth}%`).first(),
         countScreenshots(env, employee.id, bootstrapToday),
+        env.DB.prepare(`SELECT id, event_type, event_at, date_key FROM tracker_events WHERE employee_id = ? AND date_key = ? ORDER BY event_at ASC`).bind(employee.id, bootstrapToday).all(),
       ]);
+      const trackerEvents = (eventResult.results || []).map((event) => ({
+        id: event.id,
+        eventType: event.event_type,
+        eventAt: event.event_at,
+        dateKey: event.date_key,
+      }));
       bootstrapSummary.push({
         employeeId: employee.id,
         employeeName: employee.name,
@@ -1182,8 +1192,6 @@ async function handleApi(
         todaySeconds: Number(todayRecord?.total_seconds || 0),
         monthlySeconds: Number(monthResult?.total || 0),
         todayScreenshots,
-
-        // Include lifecycle events in the response consumed by AdminDashboard.
         trackerEvents,
       });
     }
