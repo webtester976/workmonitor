@@ -436,4 +436,4 @@ export async function deleteLocalScreenshot(filePath: string): Promise<void> {
 
 export function getLocalBackendUrl(): string {
   return getBackendUrl();
-}
+} 
