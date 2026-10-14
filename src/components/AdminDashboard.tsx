@@ -877,21 +877,8 @@ React.FC<AdminDashboardProps> = ({
      INITIAL ADMIN LOAD
   ========================================================================== */
 
-  // Refresh the activity summary once per minute while the Admin dashboard
-  // is open. This is one lightweight request per minute and lets the Admin
-  // see employee timer syncs without logging out or manually refreshing.
-  useEffect(() => {
-    const timer = window.setInterval(() => {
-      void loadSummary().catch((error) => {
-        console.warn('Admin activity summary refresh failed:', error);
-      });
-    }, 60 * 1000);
-
-    return () => window.clearInterval(timer);
-    // loadSummary is recreated on render; this timer intentionally uses the
-    // stable dashboard lifetime and reads the latest API data on each tick.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // No automatic admin polling. Fresh data is requested only after explicit
+  // admin actions or when the admin manually refreshes a section.
 
 
   /* ==========================================================================
@@ -2176,11 +2163,13 @@ React.FC<AdminDashboardProps> = ({
                       <td className="p-4 min-w-[220px]">
                         <div className="space-y-1 text-xs">
                           {(summary?.trackerEvents || []).length === 0 ? (
-                            <span className="text-slate-400">No events yet</span>
+                            <span className="text-slate-400">No tracker events today</span>
                           ) : (summary?.trackerEvents || []).map((event) => (
-                            <div key={event.id} className="flex gap-2">
-                              <span className="font-semibold capitalize">{event.eventType}</span>
-                              <span className="text-slate-500">
+                            <div key={event.id} className="flex items-center justify-between gap-3">
+                              <span className={`font-semibold ${event.eventType === 'start' || event.eventType === 'resume' || event.eventType === 'session_restored' ? 'text-emerald-600' : event.eventType === 'pause' ? 'text-amber-600' : event.eventType === 'stop' ? 'text-rose-600' : 'text-slate-500'}`}>
+                                {({ start: 'Started', pause: 'Paused', resume: 'Resumed', stop: 'Stopped', page_refresh: 'Page refreshed', session_restored: 'Session restored' } as Record<string, string>)[event.eventType] || event.eventType}
+                              </span>
+                              <span className="text-slate-500 whitespace-nowrap">
                                 {new Date(event.eventAt).toLocaleTimeString('en-IN', {
                                   timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
                                 })}
