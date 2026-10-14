@@ -2374,6 +2374,9 @@ async function handleApi(
           ),
 
         todayScreenshots,
+
+        // Include the events queried above in the API response consumed by AdminDashboard.
+        trackerEvents,
       });
     }
 
