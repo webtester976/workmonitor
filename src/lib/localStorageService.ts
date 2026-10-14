@@ -196,6 +196,13 @@ const releaseFlushLock = (): void => {
   window.localStorage.removeItem(FLUSH_LOCK_KEY);
 };
 
+/* ========================================================================== 
+   NGROK / COMPATIBILITY HEADERS
+========================================================================== */
+
+const getNgrokHeaders = (): Record<string, string> => ({
+  'ngrok-skip-browser-warning': 'true',
+});
 
 /* ========================================================================== 
    SAVE SCREENSHOT LOCALLY
@@ -286,6 +293,7 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
       const response = await fetch(`${backendUrl}/api/upload-screenshot-batch`, {
         method: 'POST',
         headers: {
+          ...getNgrokHeaders(),
         },
         body: formData,
       });
@@ -360,27 +368,56 @@ export async function getLocalScreenshots(
   employeeId: string,
   dateKey: string
 ): Promise<LocalScreenshotItem[]> {
-  const backendUrl = getBackendUrl();
+  // Restore screenshots that are still waiting in IndexedDB first.
+  // This makes locally queued screenshots visible again after a page refresh,
+  // even before their next successful hourly Cloudflare upload.
+  const queuedItems = await getQueuedScreenshots();
+  const localItems: LocalScreenshotItem[] = queuedItems
+    .filter((item) => item.employeeId === employeeId && item.dateKey === dateKey)
+    .map((item) => ({
+      fileName: item.fileName,
+      employeeId: item.employeeId,
+      employeeName: item.employeeName,
+      folderKey: `${item.employeeId}/${item.employeeName}`,
+      dateKey: item.dateKey,
+      localUrl: URL.createObjectURL(item.blob),
+    }));
 
-  const response = await fetch(
-    `${backendUrl}/api/screenshots/${encodeURIComponent(employeeId)}/${encodeURIComponent(dateKey)}`,
-    {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-      },
-    }
-  );
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(
-      `Unable to load screenshots: ${response.status} - ${errorText}`
+  let cloudItems: LocalScreenshotItem[] = [];
+  try {
+    const backendUrl = getBackendUrl();
+    const response = await fetch(
+      `${backendUrl}/api/screenshots/${encodeURIComponent(employeeId)}/${encodeURIComponent(dateKey)}`,
+      {
+        method: 'GET',
+        cache: 'no-store',
+        headers: {
+          ...getNgrokHeaders(),
+        },
+      }
     );
+
+    if (!response.ok) {
+      throw new Error(`Unable to load screenshots: ${response.status}`);
+    }
+
+    const data = await response.json();
+    cloudItems = Array.isArray(data?.items) ? data.items : [];
+  } catch (error) {
+    // Cloudflare may be unavailable or the batch may not have uploaded yet.
+    // Keep the locally queued screenshots visible instead of hiding them.
+    if (localItems.length > 0) return localItems;
+    throw error;
   }
 
-  const data = await response.json();
-  return Array.isArray(data?.items) ? data.items : [];
+  const cloudKeys = new Set(
+    cloudItems.map((item) => `${item.employeeId}|${item.dateKey}|${item.fileName}`)
+  );
+  const uniqueLocalItems = localItems.filter(
+    (item) => !cloudKeys.has(`${item.employeeId}|${item.dateKey}|${item.fileName}`)
+  );
+
+  return [...cloudItems, ...uniqueLocalItems];
 }
 
 /* ========================================================================== 
@@ -394,6 +431,7 @@ export async function deleteLocalScreenshot(filePath: string): Promise<void> {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
+      ...getNgrokHeaders(),
     },
     body: JSON.stringify({ filePath }),
   });
@@ -407,5 +445,3 @@ export async function deleteLocalScreenshot(filePath: string): Promise<void> {
 export function getLocalBackendUrl(): string {
   return getBackendUrl();
 }
-
-
