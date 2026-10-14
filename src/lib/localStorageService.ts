@@ -368,22 +368,23 @@ export async function getLocalScreenshots(
   employeeId: string,
   dateKey: string
 ): Promise<LocalScreenshotItem[]> {
-  // Restore screenshots that are still waiting in IndexedDB first.
-  // This makes locally queued screenshots visible again after a page refresh,
-  // even before their next successful hourly Cloudflare upload.
-  const queuedItems = await getQueuedScreenshots();
-  const localItems: LocalScreenshotItem[] = queuedItems
-    .filter((item) => item.employeeId === employeeId && item.dateKey === dateKey)
+  // Restore screenshots that have not reached Cloudflare yet. The Blob stays
+  // in IndexedDB; an object URL lets the current page display it after refresh.
+  const queued = await getQueuedScreenshots();
+  const localItems: LocalScreenshotItem[] = queued
+    .filter((item) => item.employeeId === employeeId && item.dateKey === dateKey && item.blob instanceof Blob)
     .map((item) => ({
       fileName: item.fileName,
       employeeId: item.employeeId,
       employeeName: item.employeeName,
-      folderKey: `${item.employeeId}/${item.employeeName}`,
+      folderKey: `${item.employeeId}/${item.dateKey}`,
       dateKey: item.dateKey,
       localUrl: URL.createObjectURL(item.blob),
     }));
 
-  let cloudItems: LocalScreenshotItem[] = [];
+  // Cloud history is useful after a successful upload has removed the local
+  // queue record. If the Worker is temporarily unavailable, still show local
+  // pending screenshots instead of replacing the whole history with an error.
   try {
     const backendUrl = getBackendUrl();
     const response = await fetch(
@@ -391,33 +392,24 @@ export async function getLocalScreenshots(
       {
         method: 'GET',
         cache: 'no-store',
-        headers: {
-          ...getNgrokHeaders(),
-        },
+        headers: { ...getNgrokHeaders() },
       }
     );
 
     if (!response.ok) {
-      throw new Error(`Unable to load screenshots: ${response.status}`);
+      console.warn(`Unable to load cloud screenshots (${response.status}); showing local queue items.`);
+      return localItems;
     }
 
     const data = await response.json();
-    cloudItems = Array.isArray(data?.items) ? data.items : [];
+    const cloudItems: LocalScreenshotItem[] = Array.isArray(data?.items) ? data.items : [];
+    const cloudNames = new Set(cloudItems.map((item) => `${item.dateKey || dateKey}/${item.fileName}`));
+    const uniqueLocal = localItems.filter((item) => !cloudNames.has(`${item.dateKey}/${item.fileName}`));
+    return [...cloudItems, ...uniqueLocal];
   } catch (error) {
-    // Cloudflare may be unavailable or the batch may not have uploaded yet.
-    // Keep the locally queued screenshots visible instead of hiding them.
-    if (localItems.length > 0) return localItems;
-    throw error;
+    console.warn('Cloud screenshot history unavailable; showing local queue items.', error);
+    return localItems;
   }
-
-  const cloudKeys = new Set(
-    cloudItems.map((item) => `${item.employeeId}|${item.dateKey}|${item.fileName}`)
-  );
-  const uniqueLocalItems = localItems.filter(
-    (item) => !cloudKeys.has(`${item.employeeId}|${item.dateKey}|${item.fileName}`)
-  );
-
-  return [...cloudItems, ...uniqueLocalItems];
 }
 
 /* ========================================================================== 
