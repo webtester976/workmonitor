@@ -73,6 +73,25 @@ function monthKey() {
   return new Date().toISOString().slice(0, 7);
 }
 
+function indiaDateKey(date = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(date);
+  const part = (type) => parts.find((item) => item.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+const TRACKER_EVENT_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS tracker_events (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    employee_name TEXT,
+    event_type TEXT NOT NULL,
+    event_at TEXT NOT NULL,
+    date_key TEXT NOT NULL
+  )
+`;
+
 function safeFileName(
   value,
   fallback = `Screen_${Date.now()}.webp`
@@ -1489,6 +1508,34 @@ async function handleApi(
 
 
   // ====================================================
+  // TRACKER START / PAUSE / RESUME / STOP EVENT
+  // ====================================================
+
+  if (method === 'POST' && pathname === '/api/tracker-event') {
+    const body = await parseBody(request);
+    const employeeId = String(body.employeeId || '');
+    const eventType = String(body.eventType || '').toLowerCase();
+    const allowedEvents = new Set(['start', 'pause', 'resume', 'stop']);
+    if (!employeeId) return json({ success: false, error: 'employeeId is required.' }, 400);
+    if (!allowedEvents.has(eventType)) return json({ success: false, error: 'Invalid eventType.' }, 400);
+
+    const employee = await env.DB.prepare(
+      'SELECT id, name FROM employees WHERE id = ? LIMIT 1'
+    ).bind(employeeId).first();
+    if (!employee) return json({ success: false, error: 'Employee not found.' }, 404);
+
+    await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
+    const eventAt = new Date().toISOString();
+    const dateKey = indiaDateKey(new Date(eventAt));
+    const eventId = crypto.randomUUID();
+    await env.DB.prepare(`
+      INSERT INTO tracker_events (id, employee_id, employee_name, event_type, event_at, date_key)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(eventId, employeeId, employee.name || body.employeeName || 'Employee', eventType, eventAt, dateKey).run();
+    return json({ success: true, event: { id: eventId, employeeId, eventType, eventAt, dateKey } });
+  }
+
+  // ====================================================
   // TRACKER SAVE
   // ====================================================
 
@@ -2190,7 +2237,7 @@ async function handleApi(
       '/api/admin/activity-summary'
   ) {
     const today =
-      todayKey();
+      indiaDateKey();
 
 
     const requestedMonth =
@@ -2224,6 +2271,7 @@ async function handleApi(
     const summaries =
       [];
 
+    await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
 
     for (
       const employee of
@@ -2271,6 +2319,19 @@ async function handleApi(
           today
         );
 
+
+      const eventResult = await env.DB.prepare(`
+        SELECT id, event_type, event_at, date_key
+        FROM tracker_events
+        WHERE employee_id = ? AND date_key = ?
+        ORDER BY event_at ASC
+      `).bind(employee.id, today).all();
+      const trackerEvents = (eventResult.results || []).map((event) => ({
+        id: event.id,
+        eventType: event.event_type,
+        eventAt: event.event_at,
+        dateKey: event.date_key,
+      }));
 
       summaries.push({
         employeeId:
