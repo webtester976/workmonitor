@@ -190,8 +190,6 @@ export const EmployeeDashboard:
   const backendHeaders =
     useMemo(
       () => ({
-        'ngrok-skip-browser-warning':
-          'true',
       }),
       []
     );
@@ -388,12 +386,6 @@ export const EmployeeDashboard:
     useRef<
       number | null
     >(null);
-
-  // Account for real elapsed wall-clock time instead of assuming every
-  // setInterval callback fires exactly once per second. Browsers throttle
-  // background tabs, so a +1-per-callback timer silently loses time.
-  const lastTimerTickAtRef = useRef<number | null>(null);
-  const timerRemainderMsRef = useRef(0);
 
   // Central D1 tracker sync runs only once per minute while actively tracking.
   const trackerSyncIntervalRef =
@@ -684,45 +676,57 @@ export const EmployeeDashboard:
   // ====================================================
 
   useEffect(() => {
-    if (isTracking && !isPaused) {
-      // Reset the elapsed-time baseline whenever tracking resumes. Time spent
-      // paused or with the page closed must not be added to the work timer.
-      lastTimerTickAtRef.current = Date.now();
-      timerRemainderMsRef.current = 0;
+    if (
+      isTracking &&
+      !isPaused
+    ) {
+      trackerTimerRef.current =
+        window.setInterval(
+          () => {
+            setSessionSeconds(
+              (
+                previous
+              ) =>
+                previous +
+                1
+            );
 
-      trackerTimerRef.current = window.setInterval(() => {
-        const now = Date.now();
-        const last = lastTimerTickAtRef.current ?? now;
-        lastTimerTickAtRef.current = now;
-
-        const elapsedMs = Math.max(0, now - last) + timerRemainderMsRef.current;
-        const elapsedSeconds = Math.floor(elapsedMs / 1000);
-        timerRemainderMsRef.current = elapsedMs % 1000;
-
-        if (elapsedSeconds <= 0) return;
-
-        // Update the ref synchronously so a simultaneous central sync reads
-        // the latest elapsed time, even before React has rendered the state.
-        daySecondsRef.current += elapsedSeconds;
-        setDayTotalSeconds(daySecondsRef.current);
-        setSessionSeconds((previous) => previous + elapsedSeconds);
-      }, 1000);
+            setDayTotalSeconds(
+              (
+                previous
+              ) =>
+                previous +
+                1
+            );
+          },
+          1000
+        );
     } else {
-      lastTimerTickAtRef.current = null;
-      timerRemainderMsRef.current = 0;
-      if (trackerTimerRef.current !== null) {
-        window.clearInterval(trackerTimerRef.current);
-        trackerTimerRef.current = null;
+      if (
+        trackerTimerRef.current
+      ) {
+        clearInterval(
+          trackerTimerRef.current
+        );
+
+        trackerTimerRef.current =
+          null;
       }
     }
 
     return () => {
-      if (trackerTimerRef.current !== null) {
-        window.clearInterval(trackerTimerRef.current);
-        trackerTimerRef.current = null;
+      if (
+        trackerTimerRef.current
+      ) {
+        clearInterval(
+          trackerTimerRef.current
+        );
       }
     };
-  }, [isTracking, isPaused]);
+  }, [
+    isTracking,
+    isPaused,
+  ]);
 
   // ====================================================
   // PERIODIC CENTRAL TRACKER SYNC
@@ -2125,7 +2129,6 @@ export const EmployeeDashboard:
             method: 'GET',
             cache: 'force-cache',
             headers: {
-              'ngrok-skip-browser-warning': 'true',
             },
           });
 
