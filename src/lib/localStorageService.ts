@@ -201,7 +201,6 @@ const releaseFlushLock = (): void => {
 ========================================================================== */
 
 const getNgrokHeaders = (): Record<string, string> => ({
-  'ngrok-skip-browser-warning': 'true',
 });
 
 /* ========================================================================== 
