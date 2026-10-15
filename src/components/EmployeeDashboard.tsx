@@ -380,6 +380,11 @@ export const EmployeeDashboard:
       number | null
     >(null);
 
+  // Wall-clock anchor: elapsed tracking time must not depend on how often
+  // the browser gets CPU time to run an interval callback.
+  const timerLastTickAtRef =
+    useRef<number | null>(null);
+
   // Central D1 tracker sync runs only once per minute while actively tracking.
   const trackerSyncIntervalRef =
     useRef<
@@ -665,43 +670,39 @@ export const EmployeeDashboard:
     };
 
   // ====================================================
-  // ACCURATE WALL-CLOCK TIMER
-  // Calculate elapsed time from timestamps instead of counting interval
-  // callbacks. Browsers throttle setInterval in background tabs/sleep, which
-  // can make a counter fall behind by many minutes.
+  // TIMER — wall-clock based, resilient to a laggy/background browser tab.
+  // Interval callbacks only refresh the display; Date.now() determines time.
   // ====================================================
-
-  const segmentStartAtRef = useRef<number | null>(null);
-  const segmentSessionBaseRef = useRef(0);
-  const segmentDayBaseRef = useRef(0);
-
-  const updateTimerFromClock = () => {
-    const startedAt = segmentStartAtRef.current;
-    if (startedAt === null) return;
-
-    const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
-    const nextSessionSeconds = segmentSessionBaseRef.current + elapsed;
-    const nextDaySeconds = segmentDayBaseRef.current + elapsed;
-
-    setSessionSeconds(nextSessionSeconds);
-    setDayTotalSeconds(nextDaySeconds);
-    daySecondsRef.current = nextDaySeconds;
-  };
 
   useEffect(() => {
     if (isTracking && !isPaused) {
-      if (segmentStartAtRef.current === null) {
-        segmentSessionBaseRef.current = sessionSeconds;
-        segmentDayBaseRef.current = dayTotalSeconds;
-        segmentStartAtRef.current = Date.now();
-      }
+      // Start a fresh anchor when tracking starts or resumes. Paused time
+      // is therefore excluded from elapsed tracking time.
+      timerLastTickAtRef.current = Date.now();
 
-      const tick = () => updateTimerFromClock();
-      tick();
-      trackerTimerRef.current = window.setInterval(tick, 1000);
-    } else if (trackerTimerRef.current !== null) {
-      window.clearInterval(trackerTimerRef.current);
-      trackerTimerRef.current = null;
+      trackerTimerRef.current = window.setInterval(() => {
+        const now = Date.now();
+        const last = timerLastTickAtRef.current;
+
+        if (last === null) {
+          timerLastTickAtRef.current = now;
+          return;
+        }
+
+        const wholeSeconds = Math.floor((now - last) / 1000);
+        if (wholeSeconds < 1) return;
+
+        // Advance by the actual elapsed seconds, not by one per callback.
+        timerLastTickAtRef.current = last + wholeSeconds * 1000;
+        setSessionSeconds(previous => previous + wholeSeconds);
+        setDayTotalSeconds(previous => previous + wholeSeconds);
+      }, 250);
+    } else {
+      if (trackerTimerRef.current !== null) {
+        window.clearInterval(trackerTimerRef.current);
+        trackerTimerRef.current = null;
+      }
+      timerLastTickAtRef.current = null;
     }
 
     return () => {
@@ -709,9 +710,11 @@ export const EmployeeDashboard:
         window.clearInterval(trackerTimerRef.current);
         trackerTimerRef.current = null;
       }
+      // Don't accumulate time while paused/stopped. The next active effect
+      // starts a new wall-clock anchor.
+      timerLastTickAtRef.current = null;
     };
   }, [isTracking, isPaused]);
-
 
   // ====================================================
   // PERIODIC CENTRAL TRACKER SYNC
@@ -2196,18 +2199,11 @@ export const EmployeeDashboard:
         false
       );
 
-      const startingSessionSeconds = restoredSessionRef.current
-        ? sessionSeconds
-        : 0;
       if (restoredSessionRef.current) {
         restoredSessionRef.current = false;
       } else {
         setSessionSeconds(0);
       }
-
-      segmentSessionBaseRef.current = startingSessionSeconds;
-      segmentDayBaseRef.current = daySecondsRef.current;
-      segmentStartAtRef.current = Date.now();
 
       setLastStatus(
         '✅ Tracking started'
@@ -2228,9 +2224,6 @@ export const EmployeeDashboard:
 
   const pauseTracking =
     async () => {
-
-      updateTimerFromClock();
-      segmentStartAtRef.current = null;
 
       pausedRef.current =
         true;
@@ -2260,10 +2253,6 @@ export const EmployeeDashboard:
   const resumeTracking =
     () => {
 
-      segmentSessionBaseRef.current = sessionSeconds;
-      segmentDayBaseRef.current = daySecondsRef.current;
-      segmentStartAtRef.current = Date.now();
-
       pausedRef.current =
         false;
 
@@ -2288,9 +2277,6 @@ export const EmployeeDashboard:
 
   const stopTracking =
     async () => {
-
-      updateTimerFromClock();
-      segmentStartAtRef.current = null;
 
       await logTrackerEvent('stop');
       await syncTrackerTime();
