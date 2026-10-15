@@ -665,61 +665,53 @@ export const EmployeeDashboard:
     };
 
   // ====================================================
-  // TIMER
+  // ACCURATE WALL-CLOCK TIMER
+  // Calculate elapsed time from timestamps instead of counting interval
+  // callbacks. Browsers throttle setInterval in background tabs/sleep, which
+  // can make a counter fall behind by many minutes.
   // ====================================================
 
+  const segmentStartAtRef = useRef<number | null>(null);
+  const segmentSessionBaseRef = useRef(0);
+  const segmentDayBaseRef = useRef(0);
+
+  const updateTimerFromClock = () => {
+    const startedAt = segmentStartAtRef.current;
+    if (startedAt === null) return;
+
+    const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
+    const nextSessionSeconds = segmentSessionBaseRef.current + elapsed;
+    const nextDaySeconds = segmentDayBaseRef.current + elapsed;
+
+    setSessionSeconds(nextSessionSeconds);
+    setDayTotalSeconds(nextDaySeconds);
+    daySecondsRef.current = nextDaySeconds;
+  };
+
   useEffect(() => {
-    if (
-      isTracking &&
-      !isPaused
-    ) {
-      trackerTimerRef.current =
-        window.setInterval(
-          () => {
-            setSessionSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
-
-            setDayTotalSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
-          },
-          1000
-        );
-    } else {
-      if (
-        trackerTimerRef.current
-      ) {
-        clearInterval(
-          trackerTimerRef.current
-        );
-
-        trackerTimerRef.current =
-          null;
+    if (isTracking && !isPaused) {
+      if (segmentStartAtRef.current === null) {
+        segmentSessionBaseRef.current = sessionSeconds;
+        segmentDayBaseRef.current = dayTotalSeconds;
+        segmentStartAtRef.current = Date.now();
       }
+
+      const tick = () => updateTimerFromClock();
+      tick();
+      trackerTimerRef.current = window.setInterval(tick, 1000);
+    } else if (trackerTimerRef.current !== null) {
+      window.clearInterval(trackerTimerRef.current);
+      trackerTimerRef.current = null;
     }
 
     return () => {
-      if (
-        trackerTimerRef.current
-      ) {
-        clearInterval(
-          trackerTimerRef.current
-        );
+      if (trackerTimerRef.current !== null) {
+        window.clearInterval(trackerTimerRef.current);
+        trackerTimerRef.current = null;
       }
     };
-  }, [
-    isTracking,
-    isPaused,
-  ]);
+  }, [isTracking, isPaused]);
+
 
   // ====================================================
   // PERIODIC CENTRAL TRACKER SYNC
@@ -2204,11 +2196,18 @@ export const EmployeeDashboard:
         false
       );
 
+      const startingSessionSeconds = restoredSessionRef.current
+        ? sessionSeconds
+        : 0;
       if (restoredSessionRef.current) {
         restoredSessionRef.current = false;
       } else {
         setSessionSeconds(0);
       }
+
+      segmentSessionBaseRef.current = startingSessionSeconds;
+      segmentDayBaseRef.current = daySecondsRef.current;
+      segmentStartAtRef.current = Date.now();
 
       setLastStatus(
         '✅ Tracking started'
@@ -2229,6 +2228,9 @@ export const EmployeeDashboard:
 
   const pauseTracking =
     async () => {
+
+      updateTimerFromClock();
+      segmentStartAtRef.current = null;
 
       pausedRef.current =
         true;
@@ -2258,6 +2260,10 @@ export const EmployeeDashboard:
   const resumeTracking =
     () => {
 
+      segmentSessionBaseRef.current = sessionSeconds;
+      segmentDayBaseRef.current = daySecondsRef.current;
+      segmentStartAtRef.current = Date.now();
+
       pausedRef.current =
         false;
 
@@ -2282,6 +2288,9 @@ export const EmployeeDashboard:
 
   const stopTracking =
     async () => {
+
+      updateTimerFromClock();
+      segmentStartAtRef.current = null;
 
       await logTrackerEvent('stop');
       await syncTrackerTime();
