@@ -3,7 +3,7 @@ function json(data, status = 200) {
     status,
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization, ngrok-skip-browser-warning',
       'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     },
   });
@@ -294,7 +294,7 @@ async function handleApi(
             '*',
 
           'Access-Control-Allow-Headers':
-            'Content-Type, Authorization',
+            'Content-Type, Authorization, ngrok-skip-browser-warning',
 
           'Access-Control-Allow-Methods':
             'GET, POST, PUT, PATCH, DELETE, OPTIONS',
@@ -3234,4 +3234,3 @@ export default {
     );
   },
 };
- 
