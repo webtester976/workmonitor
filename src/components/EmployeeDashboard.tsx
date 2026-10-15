@@ -380,11 +380,6 @@ export const EmployeeDashboard:
       number | null
     >(null);
 
-  // Wall-clock anchor: elapsed tracking time must not depend on how often
-  // the browser gets CPU time to run an interval callback.
-  const timerLastTickAtRef =
-    useRef<number | null>(null);
-
   // Central D1 tracker sync runs only once per minute while actively tracking.
   const trackerSyncIntervalRef =
     useRef<
@@ -540,7 +535,6 @@ export const EmployeeDashboard:
           restoredSessionSeconds > 0
         ) {
           restoredSessionRef.current = true;
-          void logTrackerEvent('session_restored');
           setLastStatus(
             'Previous tracking time restored. Click Start Tracking to continue.'
           );
@@ -669,52 +663,137 @@ export const EmployeeDashboard:
       }
     };
 
+  // Save explicit tracker actions to Cloudflare so Admin can see every
+  // Start / Pause / Resume / Stop timestamp for the employee's IST day.
+  const logTrackerEvent = async (
+    eventType: 'start' | 'pause' | 'resume' | 'stop'
+  ) => {
+    try {
+      const response = await fetch(
+        `${backendUrl}/api/tracker-event`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            employeeId: currentUser.id,
+            employeeName: currentUser.name,
+            eventType,
+          }),
+        }
+      );
+      const data = await readApiJson(response);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'Tracker event save failed');
+      }
+    } catch (error) {
+      // Keep the timer usable even if the network is temporarily unavailable.
+      console.error(`Could not save tracker event (${eventType}):`, error);
+      setLastStatus(`Warning: ${eventType} time could not be synced to Admin.`);
+    }
+  };
+
   // ====================================================
-  // TIMER — wall-clock based, resilient to a laggy/background browser tab.
-  // Interval callbacks only refresh the display; Date.now() determines time.
+  // LOAD CENTRAL DAILY TOTAL (SHARED ACROSS PCS)
+  // ====================================================
+  // Cloudflare D1 is the source of truth for the employee's total for today.
+  // localStorage is only a fallback for this browser/device.
+  const loadCentralTrackerTime = async (): Promise<number> => {
+    try {
+      const employeeId = encodeURIComponent(String(currentUser.id));
+      const dateKey = getTodayDateKey();
+      let localSeconds = 0;
+      try {
+        const localRaw = localStorage.getItem(timerStorageKey);
+        if (localRaw) {
+          const localSaved = JSON.parse(localRaw);
+          localSeconds = Math.max(0, Math.floor(Number(localSaved?.dayTotalSeconds) || 0));
+        }
+      } catch {
+        // Ignore malformed browser storage; Cloudflare D1 remains the shared source.
+      }
+      const response = await fetch(
+        `${backendUrl}/api/tracker-time/${employeeId}/${dateKey}`,
+        { method: 'GET', headers: { 'Content-Type': 'application/json' } }
+      );
+      const data = await readApiJson(response);
+      if (!response.ok || !data?.success) {
+        throw new Error(data?.error || 'Could not load central tracker time');
+      }
+      const centralSeconds = Math.max(0, Math.floor(Number(data.totalSeconds) || 0));
+      const mergedSeconds = Math.max(centralSeconds, localSeconds, daySecondsRef.current || 0);
+      daySecondsRef.current = mergedSeconds;
+      setDayTotalSeconds(previous => Math.max(previous, mergedSeconds));
+      return mergedSeconds;
+    } catch (error) {
+      console.warn('Central tracker time load warning:', error);
+      return Math.max(0, daySecondsRef.current || 0);
+    }
+  };
+
+  // Load the saved total from Cloudflare whenever this employee opens the dashboard
+  // on a new browser or computer. Never replace a larger local value with a smaller one.
+  useEffect(() => {
+    void loadCentralTrackerTime();
+    // The employee and date identify the central daily record.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentUser.id, backendUrl, timerStorageKey]);
+
+  // ====================================================
+  // TIMER
   // ====================================================
 
   useEffect(() => {
-    if (isTracking && !isPaused) {
-      // Start a fresh anchor when tracking starts or resumes. Paused time
-      // is therefore excluded from elapsed tracking time.
-      timerLastTickAtRef.current = Date.now();
+    if (
+      isTracking &&
+      !isPaused
+    ) {
+      trackerTimerRef.current =
+        window.setInterval(
+          () => {
+            setSessionSeconds(
+              (
+                previous
+              ) =>
+                previous +
+                1
+            );
 
-      trackerTimerRef.current = window.setInterval(() => {
-        const now = Date.now();
-        const last = timerLastTickAtRef.current;
-
-        if (last === null) {
-          timerLastTickAtRef.current = now;
-          return;
-        }
-
-        const wholeSeconds = Math.floor((now - last) / 1000);
-        if (wholeSeconds < 1) return;
-
-        // Advance by the actual elapsed seconds, not by one per callback.
-        timerLastTickAtRef.current = last + wholeSeconds * 1000;
-        setSessionSeconds(previous => previous + wholeSeconds);
-        setDayTotalSeconds(previous => previous + wholeSeconds);
-      }, 250);
+            setDayTotalSeconds(
+              (
+                previous
+              ) =>
+                previous +
+                1
+            );
+          },
+          1000
+        );
     } else {
-      if (trackerTimerRef.current !== null) {
-        window.clearInterval(trackerTimerRef.current);
-        trackerTimerRef.current = null;
+      if (
+        trackerTimerRef.current
+      ) {
+        clearInterval(
+          trackerTimerRef.current
+        );
+
+        trackerTimerRef.current =
+          null;
       }
-      timerLastTickAtRef.current = null;
     }
 
     return () => {
-      if (trackerTimerRef.current !== null) {
-        window.clearInterval(trackerTimerRef.current);
-        trackerTimerRef.current = null;
+      if (
+        trackerTimerRef.current
+      ) {
+        clearInterval(
+          trackerTimerRef.current
+        );
       }
-      // Don't accumulate time while paused/stopped. The next active effect
-      // starts a new wall-clock anchor.
-      timerLastTickAtRef.current = null;
     };
-  }, [isTracking, isPaused]);
+  }, [
+    isTracking,
+    isPaused,
+  ]);
 
   // ====================================================
   // PERIODIC CENTRAL TRACKER SYNC
@@ -2098,8 +2177,6 @@ export const EmployeeDashboard:
           const response = await fetch(source, {
             method: 'GET',
             cache: 'force-cache',
-            headers: {
-            },
           });
 
           if (!response.ok) {
@@ -2133,44 +2210,6 @@ export const EmployeeDashboard:
     };
   }, [mergedScreenshots]);
 
-  // Persist tracker lifecycle events to the Worker. This is deliberately
-  // separate from the timer total so refresh/restore never masquerade as Stop.
-  const logTrackerEvent = async (
-    eventType: 'start' | 'pause' | 'resume' | 'stop' | 'page_refresh' | 'session_restored',
-    keepalive = false
-  ) => {
-    try {
-      const response = await fetch(`${backendUrl}/api/tracker-event`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          employeeId: currentUser.id,
-          employeeName: currentUser.name,
-          eventType,
-        }),
-        keepalive,
-      });
-      const data = await readApiJson(response);
-      if (!response.ok || !data?.success) {
-        throw new Error(data?.error || `Could not save ${eventType}`);
-      }
-    } catch (error) {
-      // Event logging must never prevent the local timer/screenshots from working.
-      console.warn(`Tracker event sync failed (${eventType}):`, error);
-    }
-  };
-
-  // Record browser refresh/navigation separately. Do not label it as Stop.
-  useEffect(() => {
-    const handlePageHide = () => {
-      void logTrackerEvent('page_refresh', true);
-    };
-    window.addEventListener('pagehide', handlePageHide);
-    return () => window.removeEventListener('pagehide', handlePageHide);
-    // One listener per employee dashboard mount.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentUser.id, backendUrl]);
-
   // ====================================================
   // START
   // ====================================================
@@ -2184,6 +2223,12 @@ export const EmployeeDashboard:
       if (!stream) {
         return;
       }
+
+      // Fetch the latest daily total from D1 before starting on this computer.
+      // This continues the same employee's total instead of starting from zero.
+      const centralTotalSeconds = await loadCentralTrackerTime();
+      daySecondsRef.current = centralTotalSeconds;
+      setDayTotalSeconds(previous => Math.max(previous, centralTotalSeconds));
 
       trackingRef.current =
         true;
@@ -2210,7 +2255,7 @@ export const EmployeeDashboard:
       );
 
       await logTrackerEvent('start');
-      await syncTrackerTime();
+      await syncTrackerTime(Math.max(daySecondsRef.current, centralTotalSeconds));
 
       scheduleRandomWindow(
         captureWindowRef.current,
