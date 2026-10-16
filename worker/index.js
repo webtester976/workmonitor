@@ -1598,7 +1598,7 @@ async function handleApi(
     const existing =
       await env.DB
         .prepare(`
-          SELECT total_seconds
+          SELECT total_seconds, updated_at
           FROM tracker_time
           WHERE employee_id = ?
             AND date_key = ?
@@ -1609,17 +1609,38 @@ async function handleApi(
         )
         .first();
 
+    const existingSeconds = Math.max(
+      0,
+      Math.floor(Number(existing?.total_seconds) || 0)
+    );
 
-    const finalSeconds =
-      Math.max(
-        Number(
-          existing
-            ?.total_seconds ||
-          0
-        ),
+    // Reject stale browser tabs that try to restore a previous day's much
+    // larger total after an administrator corrects today's D1 record. A valid
+    // running tracker can only advance by elapsed wall-clock time, with a
+    // five-minute allowance for timer/network drift.
+    if (existing && incoming > existingSeconds) {
+      const lastUpdatedMs = Date.parse(String(existing.updated_at || ''));
+      const elapsedSeconds = Number.isFinite(lastUpdatedMs)
+        ? Math.max(0, Math.floor((Date.now() - lastUpdatedMs) / 1000))
+        : 0;
+      const maxPlausibleSeconds = existingSeconds + elapsedSeconds + 300;
 
-        incoming
-      );
+      if (incoming > maxPlausibleSeconds) {
+        return json({
+          success: true,
+          ignoredStaleUpdate: true,
+          employeeId,
+          dateKey,
+          totalSeconds: existingSeconds,
+          warning: 'Ignored a stale tracker total; central daily total remains authoritative.',
+        });
+      }
+    }
+
+    // Totals are monotonic for a given IST day. Corrections are made in D1;
+    // after that correction, implausibly high stale client values are rejected
+    // by the guard above instead of being merged back into the database.
+    const finalSeconds = Math.max(existingSeconds, incoming);
 
 
     const updatedAt =
