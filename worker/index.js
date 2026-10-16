@@ -66,11 +66,13 @@ function isDateKey(value) {
 }
 
 function todayKey() {
-  return new Date().toISOString().slice(0, 10);
+  // WorkMonitor daily totals use India Standard Time, not UTC. Using UTC
+  // here can put the API's 'today' record on a different date from the UI.
+  return indiaDateKey(new Date());
 }
 
 function monthKey() {
-  return new Date().toISOString().slice(0, 7);
+  return todayKey().slice(0, 7);
 }
 
 function indiaDateKey(date = new Date()) {
