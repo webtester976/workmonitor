@@ -2065,12 +2065,7 @@ React.FC<AdminDashboardProps> = ({
                   Today
                 </th>
 
-                <th className="
-                  text-left
-                  p-4
-                ">
-                  Tracker Events (Today, IST)
-                </th>
+                
 
                 <th className="
                   text-left
@@ -2160,24 +2155,7 @@ React.FC<AdminDashboardProps> = ({
                         )}
                       </td>
 
-                      <td className="p-4 min-w-[220px]">
-                        <div className="space-y-1 text-xs">
-                          {(summary?.trackerEvents || []).length === 0 ? (
-                            <span className="text-slate-400">No tracker events today</span>
-                          ) : (summary?.trackerEvents || []).map((event) => (
-                            <div key={event.id} className="flex items-center justify-between gap-3">
-                              <span className={`font-semibold ${event.eventType === 'start' || event.eventType === 'resume' || event.eventType === 'session_restored' ? 'text-emerald-600' : event.eventType === 'pause' ? 'text-amber-600' : event.eventType === 'stop' ? 'text-rose-600' : 'text-slate-500'}`}>
-                                {({ start: 'Started', pause: 'Paused', resume: 'Resumed', stop: 'Stopped', page_refresh: 'Page refreshed', session_restored: 'Session restored' } as Record<string, string>)[event.eventType] || event.eventType}
-                              </span>
-                              <span className="text-slate-500 whitespace-nowrap">
-                                {new Date(event.eventAt).toLocaleTimeString('en-IN', {
-                                  timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
-                                })}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      </td>
+                      
 
                       <td className="
                         p-4
