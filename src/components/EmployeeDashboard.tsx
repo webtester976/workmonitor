@@ -742,21 +742,42 @@ export const EmployeeDashboard:
       trackerTimerRef.current =
         window.setInterval(
           () => {
-            setSessionSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
+            // Safety guard: tracking is allowed only from 08:30 to 20:30 India time.
+            // This prevents an unattended browser tab from counting overnight.
+            const istParts = new Intl.DateTimeFormat('en-GB', {
+              timeZone: 'Asia/Kolkata',
+              hour: '2-digit',
+              minute: '2-digit',
+              hourCycle: 'h23',
+            }).formatToParts(new Date());
+            const istHour = Number(istParts.find((part) => part.type === 'hour')?.value || 0);
+            const istMinute = Number(istParts.find((part) => part.type === 'minute')?.value || 0);
+            const istMinutes = istHour * 60 + istMinute;
+            if (istMinutes < 8 * 60 + 30 || istMinutes >= 20 * 60 + 30) {
+              // Persist the last daily total and release capture resources without relying on logout.
+              void logTrackerEvent('stop');
+              void syncTrackerTime(daySecondsRef.current);
+              trackingRef.current = false;
+              pausedRef.current = false;
+              setIsTracking(false);
+              setIsPaused(false);
+              clearCaptureTimers();
+              setNextCaptureInSec(null);
+              if (screenStreamRef.current) {
+                screenStreamRef.current.getTracks().forEach((track) => track.stop());
+                screenStreamRef.current = null;
+              }
+              if (screenVideoRef.current) screenVideoRef.current.srcObject = null;
+              setLastStatus('Tracking automatically stopped outside 08:30 AM–08:30 PM IST.');
+              return;
+            }
 
-            setDayTotalSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
+            setSessionSeconds((previous) => previous + 1);
+            setDayTotalSeconds((previous) => {
+              const next = previous + 1;
+              daySecondsRef.current = next;
+              return next;
+            });
           },
           1000
         );
