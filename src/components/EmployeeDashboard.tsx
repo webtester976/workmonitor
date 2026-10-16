@@ -395,6 +395,12 @@ export const EmployeeDashboard:
   const daySecondsRef =
     useRef(0);
 
+  // Track the IST day separately from the browser component lifetime.
+  // If the tracker is left running overnight, yesterday's accumulated total
+  // must never be carried into the new day's total.
+  const trackingDateKeyRef =
+    useRef(getTodayDateKey());
+
   // When a tracking session survives a page refresh, keep the saved
   // session duration so the next Start action resumes it instead of
   // resetting the current task to zero.
@@ -701,6 +707,7 @@ export const EmployeeDashboard:
     try {
       const employeeId = encodeURIComponent(String(currentUser.id));
       const dateKey = getTodayDateKey();
+      trackingDateKeyRef.current = dateKey;
       let localSeconds = 0;
       try {
         const localRaw = localStorage.getItem(timerStorageKey);
@@ -750,21 +757,31 @@ export const EmployeeDashboard:
       trackerTimerRef.current =
         window.setInterval(
           () => {
-            setSessionSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
+            const currentDateKey = getTodayDateKey();
 
-            setDayTotalSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
+            // A running browser can stay open past midnight. Reset only the
+            // daily counter at the IST date boundary; the active session and
+            // tracking state continue uninterrupted.
+            if (trackingDateKeyRef.current !== currentDateKey) {
+              trackingDateKeyRef.current = currentDateKey;
+              daySecondsRef.current = 0;
+              setDayTotalSeconds(0);
+
+              // Do not allow a stale local total for the new day to be
+              // mistaken for today's total. The central D1 record is loaded
+              // by the date-key effect below.
+              try {
+                localStorage.removeItem(
+                  `wm_emp_timer_${currentUser.id}_${currentDateKey}`
+                );
+              } catch {
+                // Ignore unavailable browser storage.
+              }
+            }
+
+            setSessionSeconds(previous => previous + 1);
+            daySecondsRef.current += 1;
+            setDayTotalSeconds(previous => previous + 1);
           },
           1000
         );
