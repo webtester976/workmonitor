@@ -3,8 +3,10 @@ function json(data, status = 200) {
     status,
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization, ngrok-skip-browser-warning',
-      'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+      'Access-Control-Allow-Headers':
+        'Content-Type, Authorization, ngrok-skip-browser-warning',
+      'Access-Control-Allow-Methods':
+        'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     },
   });
 }
@@ -29,10 +31,7 @@ function employeeToPublic(row) {
     lastName: row.last_name || '',
     name: row.name,
     email: row.email,
-
-    password:
-      row.password || '',
-
+    password: row.password || '',
     role: row.role,
     approved: Boolean(row.approved),
     createdAt: row.created_at,
@@ -66,8 +65,6 @@ function isDateKey(value) {
 }
 
 function todayKey() {
-  // WorkMonitor daily totals use India Standard Time, not UTC. Using UTC
-  // here can put the API's 'today' record on a different date from the UI.
   return indiaDateKey(new Date());
 }
 
@@ -77,11 +74,21 @@ function monthKey() {
 
 function indiaDateKey(date = new Date()) {
   const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Kolkata', year: 'numeric', month: '2-digit', day: '2-digit',
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
   }).formatToParts(date);
-  const part = (type) => parts.find((item) => item.type === type)?.value || '';
+
+  const part = (type) =>
+    parts.find((item) => item.type === type)?.value || '';
+
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
+
+/* ====================================================
+   TRACKER EVENTS TABLE
+   ==================================================== */
 
 const TRACKER_EVENT_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS tracker_events (
@@ -112,12 +119,21 @@ function screenshotPrefix(
   return `shot:${employeeId}:${dateKey}`;
 }
 
+/* ====================================================
+   SCREENSHOT TIME WINDOW
+   ==================================================== */
 
 const INDIA_TIME_ZONE = 'Asia/Kolkata';
-const TRACKING_START_MINUTES = 8 * 60 + 30;
-const TRACKING_END_MINUTES = 20 * 60 + 30;
 
-function isScreenshotUploadWindowOpen(date = new Date()) {
+const TRACKING_START_MINUTES =
+  8 * 60 + 30;
+
+const TRACKING_END_MINUTES =
+  20 * 60 + 30;
+
+function isScreenshotUploadWindowOpen(
+  date = new Date()
+) {
   const parts = new Intl.DateTimeFormat('en-IN', {
     timeZone: INDIA_TIME_ZONE,
     hour: '2-digit',
@@ -125,41 +141,95 @@ function isScreenshotUploadWindowOpen(date = new Date()) {
     hourCycle: 'h23',
   }).formatToParts(date);
 
-  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
-  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
-  const minutes = hour * 60 + minute;
+  const hour = Number(
+    parts.find(
+      (part) => part.type === 'hour'
+    )?.value || 0
+  );
 
-  return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
+  const minute = Number(
+    parts.find(
+      (part) => part.type === 'minute'
+    )?.value || 0
+  );
+
+  const minutes =
+    hour * 60 + minute;
+
+  return (
+    minutes >= TRACKING_START_MINUTES &&
+    minutes <= TRACKING_END_MINUTES
+  );
 }
 
-async function storeScreenshot(env, employee, file, requestedFileName, requestedDateKey, origin) {
-  const dateKey = isDateKey(requestedDateKey) ? requestedDateKey : todayKey();
-  const fileName = safeFileName(requestedFileName || file.name, `Screen_${Date.now()}.webp`);
-  const uniqueId = crypto.randomUUID();
-  const storageKey = `shot:${employee.id}:${dateKey}:${Date.now()}:${uniqueId}:${fileName}`;
-  const arrayBuffer = await file.arrayBuffer();
-  const uploadedAt = new Date().toISOString();
-  const contentType = file.type || 'image/webp';
+/* ====================================================
+   STORE SCREENSHOT
+   ==================================================== */
 
-  await env.SCREENSHOTS.put(storageKey, arrayBuffer, {
-    metadata: {
-      fileName,
-      employeeId: employee.id,
-      employeeName: employee.name,
-      email: employee.email,
-      dateKey,
-      contentType,
-      uploadedAt,
-    },
-  });
+async function storeScreenshot(
+  env,
+  employee,
+  file,
+  requestedFileName,
+  requestedDateKey,
+  origin
+) {
+  const dateKey =
+    isDateKey(requestedDateKey)
+      ? requestedDateKey
+      : todayKey();
+
+  const fileName = safeFileName(
+    requestedFileName || file.name,
+    `Screen_${Date.now()}.webp`
+  );
+
+  const uniqueId =
+    crypto.randomUUID();
+
+  const storageKey =
+    `shot:${employee.id}:${dateKey}:${Date.now()}:${uniqueId}:${fileName}`;
+
+  const arrayBuffer =
+    await file.arrayBuffer();
+
+  const uploadedAt =
+    new Date().toISOString();
+
+  const contentType =
+    file.type || 'image/webp';
+
+  await env.SCREENSHOTS.put(
+    storageKey,
+    arrayBuffer,
+    {
+      metadata: {
+        fileName,
+        employeeId: employee.id,
+        employeeName: employee.name,
+        email: employee.email,
+        dateKey,
+        contentType,
+        uploadedAt,
+      },
+    }
+  );
 
   try {
     await env.DB.prepare(`
       INSERT INTO screenshot_index (
-        id, employee_id, employee_name, email, date_key,
-        file_name, storage_key, content_type, uploaded_at
+        id,
+        employee_id,
+        employee_name,
+        email,
+        date_key,
+        file_name,
+        storage_key,
+        content_type,
+        uploaded_at
       )
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+
       ON CONFLICT(storage_key)
       DO UPDATE SET
         employee_id = excluded.employee_id,
@@ -181,7 +251,10 @@ async function storeScreenshot(env, employee, file, requestedFileName, requested
       uploadedAt
     ).run();
   } catch (error) {
-    await env.SCREENSHOTS.delete(storageKey);
+    await env.SCREENSHOTS.delete(
+      storageKey
+    );
+
     throw error;
   }
 
@@ -189,67 +262,82 @@ async function storeScreenshot(env, employee, file, requestedFileName, requested
     fileId: storageKey,
     fileName,
     filePath: storageKey,
-    employeeId: employee.id,
-    firstName: employee.first_name || '',
-    lastName: employee.last_name || '',
-    employeeName: employee.name,
-    email: employee.email,
-    monthFolder: dateKey.slice(0, 7),
+
+    employeeId:
+      employee.id,
+
+    firstName:
+      employee.first_name || '',
+
+    lastName:
+      employee.last_name || '',
+
+    employeeName:
+      employee.name,
+
+    email:
+      employee.email,
+
+    monthFolder:
+      dateKey.slice(0, 7),
+
     dateKey,
-    localUrl: `${origin}/api/screenshot-file?key=${encodeURIComponent(storageKey)}`,
+
+    localUrl:
+      `${origin}/api/screenshot-file?key=${encodeURIComponent(
+        storageKey
+      )}`,
   };
 }
 
-
-// ====================================================
-// SCREENSHOT COUNT - D1
-// ====================================================
+/* ====================================================
+   SCREENSHOT COUNT
+   ==================================================== */
 
 async function countScreenshots(
   env,
   employeeId,
   dateKey
 ) {
-  const row = await env.DB
-    .prepare(`
-      SELECT COUNT(*) AS total
-      FROM screenshot_index
-      WHERE employee_id = ?
-        AND date_key = ?
-    `)
-    .bind(
-      employeeId,
-      dateKey
-    )
-    .first();
+  const row =
+    await env.DB
+      .prepare(`
+        SELECT COUNT(*) AS total
+        FROM screenshot_index
+        WHERE employee_id = ?
+          AND date_key = ?
+      `)
+      .bind(
+        employeeId,
+        dateKey
+      )
+      .first();
 
   return Number(
     row?.total || 0
   );
 }
 
-
-// ====================================================
-// GET SCREENSHOT KEYS FOR EMPLOYEE - D1
-// Used when deleting an employee.
-// No KV list() call.
-// ====================================================
+/* ====================================================
+   SCREENSHOT KEYS
+   ==================================================== */
 
 async function listAllScreenshotKeys(
   env,
   employeeId
 ) {
-  const result = await env.DB
-    .prepare(`
-      SELECT storage_key AS name
-      FROM screenshot_index
-      WHERE employee_id = ?
-      ORDER BY uploaded_at DESC
-    `)
-    .bind(
-      employeeId
-    )
-    .all();
+  const result =
+    await env.DB
+      .prepare(`
+        SELECT storage_key AS name
+        FROM screenshot_index
+        WHERE employee_id = ?
+        ORDER BY uploaded_at DESC
+      `)
+      .bind(
+        employeeId
+      )
+      .all();
 
   return (
     result.results ||
@@ -257,19 +345,16 @@ async function listAllScreenshotKeys(
   );
 }
 
-
-// ====================================================
-// API
-// ====================================================
+/* ====================================================
+   API
+   ==================================================== */
 
 async function handleApi(
   request,
   env
 ) {
   const url =
-    new URL(
-      request.url
-    );
+    new URL(request.url);
 
   const pathname =
     url.pathname;
@@ -277,20 +362,17 @@ async function handleApi(
   const method =
     request.method;
 
-
-  // ====================================================
-  // OPTIONS / CORS
-  // ====================================================
+  /* ==================================================
+     OPTIONS / CORS
+     ================================================== */
 
   if (
-    method ===
-    'OPTIONS'
+    method === 'OPTIONS'
   ) {
     return new Response(
       null,
       {
         status: 204,
-
         headers: {
           'Access-Control-Allow-Origin':
             '*',
@@ -305,10 +387,9 @@ async function handleApi(
     );
   }
 
-
-  // ====================================================
-  // HEALTH
-  // ====================================================
+  /* ==================================================
+     HEALTH
+     ================================================== */
 
   if (
     method === 'GET' &&
@@ -316,7 +397,6 @@ async function handleApi(
   ) {
     return json({
       success: true,
-
       ok: true,
 
       storage:
@@ -328,28 +408,23 @@ async function handleApi(
           : 'disabled',
 
       screenshotUploadEnabled:
-        Boolean(
-          env.SCREENSHOTS
-        ),
+        Boolean(env.SCREENSHOTS),
 
       database:
         'codesdot-workmonitor-db',
 
       serverTime:
-        new Date()
-          .toISOString(),
+        new Date().toISOString(),
     });
   }
 
-
-  // ====================================================
-  // EMPLOYEES
-  // ====================================================
+  /* ==================================================
+     EMPLOYEES
+     ================================================== */
 
   if (
     method === 'GET' &&
-    pathname ===
-      '/api/employees'
+    pathname === '/api/employees'
   ) {
     const result =
       await env.DB
@@ -370,31 +445,25 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // REQUEST SIGNUP
-  // ====================================================
+  /* ==================================================
+     REQUEST SIGNUP
+     ================================================== */
 
   if (
     method === 'POST' &&
-    pathname ===
-      '/api/request-signup'
+    pathname === '/api/request-signup'
   ) {
     const body =
-      await parseBody(
-        request
-      );
+      await parseBody(request);
 
     const firstName =
       String(
-        body.firstName ||
-        ''
+        body.firstName || ''
       ).trim();
 
     const lastName =
       String(
-        body.lastName ||
-        ''
+        body.lastName || ''
       ).trim();
 
     const name =
@@ -405,16 +474,12 @@ async function handleApi(
       );
 
     const email =
-      normalizeEmail(
-        body.email
-      );
+      normalizeEmail(body.email);
 
     const password =
       String(
-        body.password ||
-        ''
+        body.password || ''
       );
-
 
     if (
       !name ||
@@ -424,14 +489,12 @@ async function handleApi(
       return json(
         {
           success: false,
-
           error:
             'First name, last name, email and password are required.',
         },
         400
       );
     }
-
 
     const active =
       await env.DB
@@ -441,24 +504,19 @@ async function handleApi(
           WHERE email = ?
           LIMIT 1
         `)
-        .bind(
-          email
-        )
+        .bind(email)
         .first();
-
 
     if (active) {
       return json(
         {
           success: false,
-
           error:
             'An active employee account already exists with this email.',
         },
         409
       );
     }
-
 
     const pending =
       await env.DB
@@ -468,19 +526,14 @@ async function handleApi(
           WHERE email = ?
           LIMIT 1
         `)
-        .bind(
-          email
-        )
+        .bind(email)
         .first();
-
 
     if (pending) {
       return json(
         {
           success: false,
-
           pending: true,
-
           error:
             'Your signup request is already waiting for administrator approval.',
         },
@@ -488,15 +541,12 @@ async function handleApi(
       );
     }
 
-
     const id =
       body.id ||
       `pending-${Date.now()}`;
 
     const requestedAt =
-      new Date()
-        .toISOString();
-
+      new Date().toISOString();
 
     await env.DB
       .prepare(`
@@ -523,11 +573,9 @@ async function handleApi(
       )
       .run();
 
-
     return json(
       {
         success: true,
-
         pending: true,
 
         signup: {
@@ -537,10 +585,8 @@ async function handleApi(
           name,
           email,
           requestedAt,
-
           timestamp:
             requestedAt,
-
           status:
             'pending',
         },
@@ -552,10 +598,9 @@ async function handleApi(
     );
   }
 
-
-  // ====================================================
-  // PENDING EMPLOYEES
-  // ====================================================
+  /* ==================================================
+     PENDING EMPLOYEES
+     ================================================== */
 
   if (
     method === 'GET' &&
@@ -581,16 +626,14 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // APPROVE EMPLOYEE
-  // ====================================================
+  /* ==================================================
+     APPROVE EMPLOYEE
+     ================================================== */
 
   const approveMatch =
     pathname.match(
       /^\/api\/approve-employee\/([^/]+)$/
     );
-
 
   if (
     method === 'POST' &&
@@ -601,7 +644,6 @@ async function handleApi(
         approveMatch[1]
       );
 
-
     const pending =
       await env.DB
         .prepare(`
@@ -610,24 +652,19 @@ async function handleApi(
           WHERE id = ?
           LIMIT 1
         `)
-        .bind(
-          pendingId
-        )
+        .bind(pendingId)
         .first();
-
 
     if (!pending) {
       return json(
         {
           success: false,
-
           error:
             'Pending signup not found.',
         },
         404
       );
     }
-
 
     const existing =
       await env.DB
@@ -637,11 +674,8 @@ async function handleApi(
           WHERE email = ?
           LIMIT 1
         `)
-        .bind(
-          pending.email
-        )
+        .bind(pending.email)
         .first();
-
 
     if (existing) {
       await env.DB
@@ -649,16 +683,12 @@ async function handleApi(
           DELETE FROM pending_signups
           WHERE id = ?
         `)
-        .bind(
-          pendingId
-        )
+        .bind(pendingId)
         .run();
-
 
       return json(
         {
           success: false,
-
           error:
             'Employee is already active.',
         },
@@ -666,20 +696,13 @@ async function handleApi(
       );
     }
 
-
     const employeeId =
       `emp-${Date.now()}-${crypto
         .randomUUID()
-        .slice(
-          0,
-          6
-        )}`;
-
+        .slice(0, 6)}`;
 
     const now =
-      new Date()
-        .toISOString();
-
+      new Date().toISOString();
 
     await env.DB.batch([
       env.DB
@@ -700,10 +723,8 @@ async function handleApi(
         `)
         .bind(
           employeeId,
-          pending.first_name ||
-            '',
-          pending.last_name ||
-            '',
+          pending.first_name || '',
+          pending.last_name || '',
           pending.name,
           pending.email,
           pending.password,
@@ -716,11 +737,8 @@ async function handleApi(
           DELETE FROM pending_signups
           WHERE id = ?
         `)
-        .bind(
-          pendingId
-        ),
+        .bind(pendingId),
     ]);
-
 
     const employee =
       await env.DB
@@ -729,11 +747,8 @@ async function handleApi(
           FROM employees
           WHERE id = ?
         `)
-        .bind(
-          employeeId
-        )
+        .bind(employeeId)
         .first();
-
 
     return json({
       success: true,
@@ -748,16 +763,14 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // REJECT EMPLOYEE
-  // ====================================================
+  /* ==================================================
+     REJECT EMPLOYEE
+     ================================================== */
 
   const rejectMatch =
     pathname.match(
       /^\/api\/reject-employee\/([^/]+)$/
     );
-
 
   if (
     method === 'DELETE' &&
@@ -768,7 +781,6 @@ async function handleApi(
         rejectMatch[1]
       );
 
-
     const pending =
       await env.DB
         .prepare(`
@@ -776,17 +788,13 @@ async function handleApi(
           FROM pending_signups
           WHERE id = ?
         `)
-        .bind(
-          id
-        )
+        .bind(id)
         .first();
-
 
     if (!pending) {
       return json(
         {
           success: false,
-
           error:
             'Pending signup not found.',
         },
@@ -794,27 +802,22 @@ async function handleApi(
       );
     }
 
-
     await env.DB
       .prepare(`
         DELETE FROM pending_signups
         WHERE id = ?
       `)
-      .bind(
-        id
-      )
+      .bind(id)
       .run();
-
 
     return json({
       success: true,
     });
   }
 
-
-  // ====================================================
-  // DIRECT REGISTRATION DISABLED
-  // ====================================================
+  /* ==================================================
+     DIRECT REGISTRATION DISABLED
+     ================================================== */
 
   if (
     method === 'POST' &&
@@ -824,7 +827,6 @@ async function handleApi(
     return json(
       {
         success: false,
-
         error:
           'Direct registration is disabled. Use /api/request-signup.',
       },
@@ -832,36 +834,82 @@ async function handleApi(
     );
   }
 
-
-  // ====================================================
-  // LOGIN BOOTSTRAP DATA
-  // ====================================================
+  /* ==================================================
+     CAPTURE SETTINGS HELPER
+     ================================================== */
 
   async function getCaptureSettingsRow() {
-    const row = await env.DB
-      .prepare(`
-        SELECT *
-        FROM capture_settings
-        WHERE id = 1
-      `)
-      .first();
+    const row =
+      await env.DB
+        .prepare(`
+          SELECT *
+          FROM capture_settings
+          WHERE id = 1
+        `)
+        .first();
 
     return {
-      captureMode: row?.capture_mode || 'random_count_window',
-      captureWindowSeconds: Number(row?.capture_window_seconds || 600),
-      screenshotsPerWindow: Number(row?.screenshots_per_window || 5),
-      presetId: row?.preset_id || '10m-5',
-      lockIntervalForEmployees: Boolean(row?.lock_interval_for_employees ?? 1),
-      captureIntervalSeconds: Number(row?.capture_window_seconds || 600),
-      autoCaptureIntervalMinutes: Math.max(1, Math.round(Number(row?.capture_window_seconds || 600) / 60)),
-      allowedIntervals: [10, 60, 120, 300, 600, 900],
-      updatedAt: row?.updated_at || null,
+      captureMode:
+        row?.capture_mode ||
+        'random_count_window',
+
+      captureWindowSeconds:
+        Number(
+          row?.capture_window_seconds ||
+          600
+        ),
+
+      screenshotsPerWindow:
+        Number(
+          row?.screenshots_per_window ||
+          5
+        ),
+
+      presetId:
+        row?.preset_id ||
+        '10m-5',
+
+      lockIntervalForEmployees:
+        Boolean(
+          row?.lock_interval_for_employees ??
+          1
+        ),
+
+      captureIntervalSeconds:
+        Number(
+          row?.capture_window_seconds ||
+          600
+        ),
+
+      autoCaptureIntervalMinutes:
+        Math.max(
+          1,
+          Math.round(
+            Number(
+              row?.capture_window_seconds ||
+              600
+            ) / 60
+          )
+        ),
+
+      allowedIntervals: [
+        10,
+        60,
+        120,
+        300,
+        600,
+        900,
+      ],
+
+      updatedAt:
+        row?.updated_at ||
+        null,
     };
   }
 
-  // ====================================================
-  // ADMIN LOGIN
-  // ====================================================
+  /* ==================================================
+     ADMIN LOGIN
+     ================================================== */
 
   if (
     method === 'POST' &&
@@ -869,23 +917,15 @@ async function handleApi(
       '/api/login-admin'
   ) {
     const body =
-      await parseBody(
-        request
-      );
-
+      await parseBody(request);
 
     const email =
-      normalizeEmail(
-        body.email
-      );
-
+      normalizeEmail(body.email);
 
     const password =
       String(
-        body.password ||
-        ''
+        body.password || ''
       );
-
 
     if (
       !email ||
@@ -894,14 +934,12 @@ async function handleApi(
       return json(
         {
           success: false,
-
           error:
             'Email and password are required.',
         },
         400
       );
     }
-
 
     const admin =
       await env.DB
@@ -917,12 +955,10 @@ async function handleApi(
         )
         .first();
 
-
     if (!admin) {
       return json(
         {
           success: false,
-
           error:
             'Invalid admin email or password.',
         },
@@ -930,31 +966,22 @@ async function handleApi(
       );
     }
 
-
     const encoder =
       new TextEncoder();
-
 
     const passwordKey =
       await crypto.subtle.importKey(
         'raw',
-
-        encoder.encode(
-          password
-        ),
-
+        encoder.encode(password),
         {
           name:
             'PBKDF2',
         },
-
         false,
-
         [
           'deriveBits',
         ]
       );
-
 
     const saltBytes =
       encoder.encode(
@@ -962,7 +989,6 @@ async function handleApi(
           admin.password_salt
         )
       );
-
 
     const derivedBits =
       await crypto.subtle.deriveBits(
@@ -982,12 +1008,9 @@ async function handleApi(
               100000
             ),
         },
-
         passwordKey,
-
         256
       );
-
 
     const derivedHash =
       Array.from(
@@ -999,13 +1022,9 @@ async function handleApi(
           (byte) =>
             byte
               .toString(16)
-              .padStart(
-                2,
-                '0'
-              )
+              .padStart(2, '0')
         )
         .join('');
-
 
     if (
       derivedHash !==
@@ -1016,7 +1035,6 @@ async function handleApi(
       return json(
         {
           success: false,
-
           error:
             'Invalid admin email or password.',
         },
@@ -1024,15 +1042,8 @@ async function handleApi(
       );
     }
 
-
     const now =
-      new Date()
-        .toISOString();
-
-
-    // ----------------------------------------------------
-    // Update last login
-    // ----------------------------------------------------
+      new Date().toISOString();
 
     await env.DB
       .prepare(`
@@ -1046,45 +1057,28 @@ async function handleApi(
       )
       .run();
 
-
-    // ----------------------------------------------------
-    // Generate secure session token
-    // ----------------------------------------------------
-
     const tokenBytes =
       crypto.getRandomValues(
-        new Uint8Array(
-          32
-        )
+        new Uint8Array(32)
       );
 
-
     const sessionToken =
-      Array.from(
-        tokenBytes
-      )
+      Array.from(tokenBytes)
         .map(
           (byte) =>
             byte
               .toString(16)
-              .padStart(
-                2,
-                '0'
-              )
+              .padStart(2, '0')
         )
         .join('');
-
 
     const tokenHashBuffer =
       await crypto.subtle.digest(
         'SHA-256',
-
-        new TextEncoder()
-          .encode(
-            sessionToken
-          )
+        new TextEncoder().encode(
+          sessionToken
+        )
       );
-
 
     const tokenHash =
       Array.from(
@@ -1096,44 +1090,30 @@ async function handleApi(
           (byte) =>
             byte
               .toString(16)
-              .padStart(
-                2,
-                '0'
-              )
+              .padStart(2, '0')
         )
         .join('');
-
 
     const expiresAt =
       new Date(
         Date.now() +
-        7 *
-          24 *
-          60 *
-          60 *
-          1000
-      )
-        .toISOString();
-
+          7 *
+            24 *
+            60 *
+            60 *
+            1000
+      ).toISOString();
 
     const sessionId =
       `session-${crypto.randomUUID()}`;
-
-
-    // Remove expired sessions
 
     await env.DB
       .prepare(`
         DELETE FROM admin_sessions
         WHERE expires_at <= ?
       `)
-      .bind(
-        now
-      )
+      .bind(now)
       .run();
-
-
-    // Save hashed session token
 
     await env.DB
       .prepare(`
@@ -1157,62 +1137,179 @@ async function handleApi(
       )
       .run();
 
+    const [
+      employeesResult,
+      pendingResult,
+      captureSettings,
+    ] =
+      await Promise.all([
+        env.DB
+          .prepare(`
+            SELECT *
+            FROM employees
+            WHERE approved = 1
+            ORDER BY created_at DESC
+          `)
+          .all(),
 
-    const [employeesResult, pendingResult, captureSettings] = await Promise.all([
-      env.DB.prepare(`SELECT * FROM employees WHERE approved = 1 ORDER BY created_at DESC`).all(),
-      env.DB.prepare(`SELECT * FROM pending_signups ORDER BY requested_at DESC`).all(),
-      getCaptureSettingsRow(),
-    ]);
+        env.DB
+          .prepare(`
+            SELECT *
+            FROM pending_signups
+            ORDER BY requested_at DESC
+          `)
+          .all(),
+
+        getCaptureSettingsRow(),
+      ]);
 
     const bootstrapSummary = [];
-    const bootstrapToday = todayKey();
-    const bootstrapMonth = monthKey();
-    for (const employee of employeesResult.results) {
-      const [todayRecord, monthResult, todayScreenshots] = await Promise.all([
-        env.DB.prepare(`SELECT total_seconds FROM tracker_time WHERE employee_id = ? AND date_key = ? LIMIT 1`).bind(employee.id, bootstrapToday).first(),
-        env.DB.prepare(`SELECT COALESCE(SUM(total_seconds), 0) AS total FROM tracker_time WHERE employee_id = ? AND date_key LIKE ?`).bind(employee.id, `${bootstrapMonth}%`).first(),
-        countScreenshots(env, employee.id, bootstrapToday),
-      ]);
+
+    const bootstrapToday =
+      todayKey();
+
+    const bootstrapMonth =
+      monthKey();
+
+    for (
+      const employee of
+      employeesResult.results
+    ) {
+      const [
+        todayRecord,
+        monthResult,
+        todayScreenshots,
+      ] =
+        await Promise.all([
+          env.DB
+            .prepare(`
+              SELECT total_seconds
+              FROM tracker_time
+              WHERE employee_id = ?
+                AND date_key = ?
+              LIMIT 1
+            `)
+            .bind(
+              employee.id,
+              bootstrapToday
+            )
+            .first(),
+
+          env.DB
+            .prepare(`
+              SELECT
+                COALESCE(
+                  SUM(total_seconds),
+                  0
+                ) AS total
+              FROM tracker_time
+              WHERE employee_id = ?
+                AND date_key LIKE ?
+            `)
+            .bind(
+              employee.id,
+              `${bootstrapMonth}%`
+            )
+            .first(),
+
+          countScreenshots(
+            env,
+            employee.id,
+            bootstrapToday
+          ),
+        ]);
+
       bootstrapSummary.push({
-        employeeId: employee.id,
-        employeeName: employee.name,
-        firstName: employee.first_name || '',
-        lastName: employee.last_name || '',
-        email: employee.email,
-        today: bootstrapToday,
-        monthKey: bootstrapMonth,
-        todaySeconds: Number(todayRecord?.total_seconds || 0),
-        monthlySeconds: Number(monthResult?.total || 0),
+        employeeId:
+          employee.id,
+
+        employeeName:
+          employee.name,
+
+        firstName:
+          employee.first_name || '',
+
+        lastName:
+          employee.last_name || '',
+
+        email:
+          employee.email,
+
+        today:
+          bootstrapToday,
+
+        monthKey:
+          bootstrapMonth,
+
+        todaySeconds:
+          Number(
+            todayRecord?.total_seconds ||
+            0
+          ),
+
+        monthlySeconds:
+          Number(
+            monthResult?.total ||
+            0
+          ),
+
         todayScreenshots,
       });
     }
 
     return json({
       success: true,
-      token: sessionToken,
+
+      token:
+        sessionToken,
+
       expiresAt,
+
       admin: {
-        id: admin.id,
-        name: admin.name,
-        email: admin.email,
-        role: 'admin',
-        approved: true,
-        createdAt: admin.created_at,
-        lastActive: now,
+        id:
+          admin.id,
+
+        name:
+          admin.name,
+
+        email:
+          admin.email,
+
+        role:
+          'admin',
+
+        approved:
+          true,
+
+        createdAt:
+          admin.created_at,
+
+        lastActive:
+          now,
       },
+
       bootstrap: {
-        employees: employeesResult.results.map(employeeToPublic),
-        pending: pendingResult.results.map(pendingToPublic),
+        employees:
+          employeesResult.results.map(
+            employeeToPublic
+          ),
+
+        pending:
+          pendingResult.results.map(
+            pendingToPublic
+          ),
+
         captureSettings,
-        summary: bootstrapSummary,
+
+        summary:
+          bootstrapSummary,
       },
     });
   }
 
-
-  // ====================================================
-  // EMPLOYEE LOGIN
-  // ====================================================
+  /* ==================================================
+     EMPLOYEE LOGIN
+     ================================================== */
 
   if (
     method === 'POST' &&
@@ -1220,23 +1317,17 @@ async function handleApi(
       '/api/login-employee'
   ) {
     const body =
-      await parseBody(
-        request
-      );
-
+      await parseBody(request);
 
     const email =
       normalizeEmail(
         body.email
       );
 
-
     const password =
       String(
-        body.password ||
-        ''
+        body.password || ''
       );
-
 
     if (
       !email ||
@@ -1245,14 +1336,12 @@ async function handleApi(
       return json(
         {
           success: false,
-
           error:
             'Email and password are required.',
         },
         400
       );
     }
-
 
     const employee =
       await env.DB
@@ -1270,7 +1359,6 @@ async function handleApi(
         )
         .first();
 
-
     if (!employee) {
       const pending =
         await env.DB
@@ -1285,14 +1373,11 @@ async function handleApi(
           )
           .first();
 
-
       if (pending) {
         return json(
           {
             success: false,
-
             pending: true,
-
             error:
               'Your account is waiting for administrator approval.',
           },
@@ -1300,11 +1385,9 @@ async function handleApi(
         );
       }
 
-
       return json(
         {
           success: false,
-
           error:
             'Invalid email or password.',
         },
@@ -1312,28 +1395,31 @@ async function handleApi(
       );
     }
 
-
-    const captureSettings = await getCaptureSettingsRow();
+    const captureSettings =
+      await getCaptureSettingsRow();
 
     return json({
       success: true,
-      employee: employeeToPublic(employee),
+
+      employee:
+        employeeToPublic(
+          employee
+        ),
+
       bootstrap: {
         captureSettings,
       },
     });
   }
 
-
-  // ====================================================
-  // DELETE EMPLOYEE
-  // ====================================================
+  /* ==================================================
+     DELETE EMPLOYEE
+     ================================================== */
 
   const employeeDeleteMatch =
     pathname.match(
       /^\/api\/employees\/([^/]+)$/
     );
-
 
   if (
     method === 'DELETE' &&
@@ -1344,7 +1430,6 @@ async function handleApi(
         employeeDeleteMatch[1]
       );
 
-
     const employee =
       await env.DB
         .prepare(`
@@ -1352,17 +1437,13 @@ async function handleApi(
           FROM employees
           WHERE id = ?
         `)
-        .bind(
-          id
-        )
+        .bind(id)
         .first();
-
 
     if (!employee) {
       return json(
         {
           success: false,
-
           error:
             'Employee not found.',
         },
@@ -1370,16 +1451,12 @@ async function handleApi(
       );
     }
 
-
-    if (
-      env.SCREENSHOTS
-    ) {
+    if (env.SCREENSHOTS) {
       const keys =
         await listAllScreenshotKeys(
           env,
           id
         );
-
 
       for (
         const item of
@@ -1391,36 +1468,35 @@ async function handleApi(
       }
     }
 
-
     await env.DB.batch([
       env.DB
         .prepare(`
           DELETE FROM screenshot_index
           WHERE employee_id = ?
         `)
-        .bind(
-          id
-        ),
+        .bind(id),
 
       env.DB
         .prepare(`
           DELETE FROM tracker_time
           WHERE employee_id = ?
         `)
-        .bind(
-          id
-        ),
+        .bind(id),
+
+      env.DB
+        .prepare(`
+          DELETE FROM tracker_events
+          WHERE employee_id = ?
+        `)
+        .bind(id),
 
       env.DB
         .prepare(`
           DELETE FROM employees
           WHERE id = ?
         `)
-        .bind(
-          id
-        ),
+        .bind(id),
     ]);
-
 
     return json({
       success: true,
@@ -1430,10 +1506,9 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // PROVISION EMPLOYEE
-  // ====================================================
+  /* ==================================================
+     PROVISION EMPLOYEE
+     ================================================== */
 
   if (
     method === 'POST' &&
@@ -1441,17 +1516,12 @@ async function handleApi(
       '/api/provision-employee'
   ) {
     const body =
-      await parseBody(
-        request
-      );
-
+      await parseBody(request);
 
     const employeeId =
       String(
-        body.employeeId ||
-        ''
+        body.employeeId || ''
       );
-
 
     const employee =
       await env.DB
@@ -1465,19 +1535,16 @@ async function handleApi(
         )
         .first();
 
-
     if (!employee) {
       return json(
         {
           success: false,
-
           error:
             'Employee not found.',
         },
         404
       );
     }
-
 
     return json({
       success: true,
@@ -1486,12 +1553,10 @@ async function handleApi(
         employee.id,
 
       firstName:
-        employee.first_name ||
-        '',
+        employee.first_name || '',
 
       lastName:
-        employee.last_name ||
-        '',
+        employee.last_name || '',
 
       employeeName:
         employee.name,
@@ -1500,70 +1565,52 @@ async function handleApi(
         employee.email,
 
       dateKey:
-        body.dateKey ||
-        todayKey(),
+        isDateKey(body.dateKey)
+          ? body.dateKey
+          : todayKey(),
 
       folderPath:
         null,
     });
   }
 
-
-  // ====================================================
-  // TRACKER START / PAUSE / RESUME / STOP EVENT
-  // ====================================================
-
-  if (method === 'POST' && pathname === '/api/tracker-event') {
-    const body = await parseBody(request);
-    const employeeId = String(body.employeeId || '');
-    const eventType = String(body.eventType || '').toLowerCase();
-    const allowedEvents = new Set(['start', 'pause', 'resume', 'stop']);
-    if (!employeeId) return json({ success: false, error: 'employeeId is required.' }, 400);
-    if (!allowedEvents.has(eventType)) return json({ success: false, error: 'Invalid eventType.' }, 400);
-
-    const employee = await env.DB.prepare(
-      'SELECT id, name FROM employees WHERE id = ? LIMIT 1'
-    ).bind(employeeId).first();
-    if (!employee) return json({ success: false, error: 'Employee not found.' }, 404);
-
-    await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
-    const eventAt = new Date().toISOString();
-    const dateKey = indiaDateKey(new Date(eventAt));
-    const eventId = crypto.randomUUID();
-    await env.DB.prepare(`
-      INSERT INTO tracker_events (id, employee_id, employee_name, event_type, event_at, date_key)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(eventId, employeeId, employee.name || body.employeeName || 'Employee', eventType, eventAt, dateKey).run();
-    return json({ success: true, event: { id: eventId, employeeId, eventType, eventAt, dateKey } });
-  }
-
-  // ====================================================
-  // TRACKER SAVE
-  // ====================================================
+  /* ==================================================
+     TRACKER EVENT
+     FIXED 404 ENDPOINT
+     ================================================== */
 
   if (
     method === 'POST' &&
     pathname ===
-      '/api/tracker-time'
+      '/api/tracker-event'
   ) {
     const body =
-      await parseBody(
-        request
-      );
-
+      await parseBody(request);
 
     const employeeId =
       String(
-        body.employeeId ||
-        ''
-      );
+        body.employeeId || ''
+      ).trim();
 
+    const eventType =
+      String(
+        body.eventType || ''
+      )
+        .trim()
+        .toLowerCase();
+
+    const allowedEvents =
+      new Set([
+        'start',
+        'pause',
+        'resume',
+        'stop',
+      ]);
 
     if (!employeeId) {
       return json(
         {
           success: false,
-
           error:
             'employeeId is required.',
         },
@@ -1571,6 +1618,145 @@ async function handleApi(
       );
     }
 
+    if (
+      !allowedEvents.has(
+        eventType
+      )
+    ) {
+      return json(
+        {
+          success: false,
+          error:
+            'Invalid eventType.',
+        },
+        400
+      );
+    }
+
+    const employee =
+      await env.DB
+        .prepare(`
+          SELECT
+            id,
+            first_name,
+            last_name,
+            name,
+            email
+          FROM employees
+          WHERE id = ?
+            AND approved = 1
+          LIMIT 1
+        `)
+        .bind(
+          employeeId
+        )
+        .first();
+
+    if (!employee) {
+      return json(
+        {
+          success: false,
+          error:
+            'Employee not found or not approved.',
+        },
+        404
+      );
+    }
+
+    /*
+      Create tracker_events automatically.
+      This prevents failures if the table was not
+      created by an earlier migration.
+    */
+    await env.DB
+      .prepare(
+        TRACKER_EVENT_TABLE_SQL
+      )
+      .run();
+
+    const eventAt =
+      new Date().toISOString();
+
+    const dateKey =
+      indiaDateKey(
+        new Date(eventAt)
+      );
+
+    const eventId =
+      crypto.randomUUID();
+
+    await env.DB
+      .prepare(`
+        INSERT INTO tracker_events (
+          id,
+          employee_id,
+          employee_name,
+          event_type,
+          event_at,
+          date_key
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+      `)
+      .bind(
+        eventId,
+        employeeId,
+        employee.name ||
+          body.employeeName ||
+          'Employee',
+        eventType,
+        eventAt,
+        dateKey
+      )
+      .run();
+
+    return json({
+      success: true,
+
+      event: {
+        id:
+          eventId,
+
+        employeeId,
+
+        employeeName:
+          employee.name || '',
+
+        eventType,
+
+        eventAt,
+
+        dateKey,
+      },
+    });
+  }
+
+  /* ==================================================
+     TRACKER SAVE
+     ================================================== */
+
+  if (
+    method === 'POST' &&
+    pathname ===
+      '/api/tracker-time'
+  ) {
+    const body =
+      await parseBody(request);
+
+    const employeeId =
+      String(
+        body.employeeId || ''
+      ).trim();
+
+    if (!employeeId) {
+      return json(
+        {
+          success: false,
+          error:
+            'employeeId is required.',
+        },
+        400
+      );
+    }
 
     const dateKey =
       isDateKey(
@@ -1581,24 +1767,22 @@ async function handleApi(
           )
         : todayKey();
 
-
     const incoming =
       Math.max(
         0,
-
         Math.floor(
           Number(
             body.totalSeconds
-          ) ||
-          0
+          ) || 0
         )
       );
-
 
     const existing =
       await env.DB
         .prepare(`
-          SELECT total_seconds, updated_at
+          SELECT
+            total_seconds,
+            updated_at
           FROM tracker_time
           WHERE employee_id = ?
             AND date_key = ?
@@ -1609,44 +1793,119 @@ async function handleApi(
         )
         .first();
 
-    const existingSeconds = Math.max(
-      0,
-      Math.floor(Number(existing?.total_seconds) || 0)
-    );
+    const existingSeconds =
+      Math.max(
+        0,
+        Math.floor(
+          Number(
+            existing?.total_seconds
+          ) || 0
+        )
+      );
 
-    // Reject stale browser tabs that try to restore a previous day's much
-    // larger total after an administrator corrects today's D1 record. A valid
-    // running tracker can only advance by elapsed wall-clock time, with a
-    // five-minute allowance for timer/network drift.
-    if (existing && incoming > existingSeconds) {
-      const lastUpdatedMs = Date.parse(String(existing.updated_at || ''));
-      const elapsedSeconds = Number.isFinite(lastUpdatedMs)
-        ? Math.max(0, Math.floor((Date.now() - lastUpdatedMs) / 1000))
-        : 0;
-      const maxPlausibleSeconds = existingSeconds + elapsedSeconds + 300;
+    /*
+      IMPORTANT:
 
-      if (incoming > maxPlausibleSeconds) {
+      If D1 was manually corrected by admin,
+      an old browser tab may still contain an
+      older/larger timer.
+
+      We reject values which could not have
+      happened naturally since the last D1 update.
+    */
+
+    if (
+      existing &&
+      incoming >
+        existingSeconds
+    ) {
+      const lastUpdatedMs =
+        Date.parse(
+          String(
+            existing.updated_at || ''
+          )
+        );
+
+      const elapsedSeconds =
+        Number.isFinite(
+          lastUpdatedMs
+        )
+          ? Math.max(
+              0,
+              Math.floor(
+                (
+                  Date.now() -
+                  lastUpdatedMs
+                ) / 1000
+              )
+            )
+          : 0;
+
+      /*
+        Allow:
+        existing value
+        + real elapsed time
+        + 5 minute network/timer tolerance.
+      */
+
+      const maxPlausibleSeconds =
+        existingSeconds +
+        elapsedSeconds +
+        300;
+
+      if (
+        incoming >
+        maxPlausibleSeconds
+      ) {
         return json({
           success: true,
-          ignoredStaleUpdate: true,
+
+          ignoredStaleUpdate:
+            true,
+
+          authoritative:
+            true,
+
           employeeId,
+
           dateKey,
-          totalSeconds: existingSeconds,
-          warning: 'Ignored a stale tracker total; central daily total remains authoritative.',
+
+          /*
+            Always send central D1 value
+            back to the browser.
+          */
+          totalSeconds:
+            existingSeconds,
+
+          warning:
+            'Ignored stale browser timer value. Central D1 total remains authoritative.',
         });
       }
     }
 
-    // Totals are monotonic for a given IST day. Corrections are made in D1;
-    // after that correction, implausibly high stale client values are rejected
-    // by the guard above instead of being merged back into the database.
-    const finalSeconds = Math.max(existingSeconds, incoming);
+    /*
+      Tracker totals are MONOTONIC for one date.
 
+      Example:
+      D1 = 7811 seconds
+
+      Browser sends:
+      7700 seconds
+      => keep 7811
+
+      Browser sends:
+      7820 seconds
+      => accept 7820
+    */
+
+    const finalSeconds =
+      Math.max(
+        existingSeconds,
+        incoming
+      );
 
     const updatedAt =
-      new Date()
-        .toISOString();
-
+      new Date().toISOString();
 
     await env.DB
       .prepare(`
@@ -1658,22 +1917,31 @@ async function handleApi(
           updated_at
         )
         VALUES (?, ?, ?, ?, ?)
+
         ON CONFLICT(employee_id, date_key)
         DO UPDATE SET
-          employee_name = excluded.employee_name,
-          total_seconds = excluded.total_seconds,
-          updated_at = excluded.updated_at
+          employee_name =
+            excluded.employee_name,
+
+          total_seconds =
+            excluded.total_seconds,
+
+          updated_at =
+            excluded.updated_at
       `)
       .bind(
         employeeId,
+
         dateKey,
+
         body.employeeName ||
           'Employee',
+
         finalSeconds,
+
         updatedAt
       )
       .run();
-
 
     return json({
       success: true,
@@ -1684,19 +1952,20 @@ async function handleApi(
 
       totalSeconds:
         finalSeconds,
+
+      authoritative:
+        true,
     });
   }
 
-
-  // ====================================================
-  // TRACKER BY DATE
-  // ====================================================
+  /* ==================================================
+     TRACKER BY DATE
+     ================================================== */
 
   const trackerDateMatch =
     pathname.match(
       /^\/api\/tracker-time\/([^/]+)\/(\d{4}-\d{2}-\d{2})$/
     );
-
 
   if (
     method === 'GET' &&
@@ -1707,10 +1976,8 @@ async function handleApi(
         trackerDateMatch[1]
       );
 
-
     const dateKey =
       trackerDateMatch[2];
-
 
     const record =
       await env.DB
@@ -1726,7 +1993,6 @@ async function handleApi(
         )
         .first();
 
-
     return json({
       success: true,
 
@@ -1736,28 +2002,24 @@ async function handleApi(
 
       totalSeconds:
         Number(
-          record
-            ?.total_seconds ||
+          record?.total_seconds ||
           0
         ),
 
       updatedAt:
-        record
-          ?.updated_at ||
+        record?.updated_at ||
         null,
     });
   }
 
-
-  // ====================================================
-  // TRACKER HISTORY
-  // ====================================================
+  /* ==================================================
+     TRACKER HISTORY
+     ================================================== */
 
   const trackerHistoryMatch =
     pathname.match(
       /^\/api\/tracker-time\/([^/]+)$/
     );
-
 
   if (
     method === 'GET' &&
@@ -1767,7 +2029,6 @@ async function handleApi(
       decodeURIComponent(
         trackerHistoryMatch[1]
       );
-
 
     const result =
       await env.DB
@@ -1781,7 +2042,6 @@ async function handleApi(
           employeeId
         )
         .all();
-
 
     const records =
       result.results.map(
@@ -1800,7 +2060,6 @@ async function handleApi(
         })
       );
 
-
     const totalSeconds =
       records.reduce(
         (
@@ -1809,10 +2068,8 @@ async function handleApi(
         ) =>
           total +
           record.totalSeconds,
-
         0
       );
-
 
     return json({
       success: true,
@@ -1830,16 +2087,14 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // MONTH TRACKER
-  // ====================================================
+  /* ==================================================
+     MONTH TRACKER
+     ================================================== */
 
   const monthMatch =
     pathname.match(
       /^\/api\/tracker-month\/([^/]+)\/(\d{4}-\d{2})$/
     );
-
 
   if (
     method === 'GET' &&
@@ -1850,10 +2105,8 @@ async function handleApi(
         monthMatch[1]
       );
 
-
     const selectedMonth =
       monthMatch[2];
-
 
     const result =
       await env.DB
@@ -1870,7 +2123,6 @@ async function handleApi(
         )
         .all();
 
-
     const records =
       result.results.map(
         (row) => ({
@@ -1884,7 +2136,6 @@ async function handleApi(
             ),
         })
       );
-
 
     return json({
       success: true,
@@ -1902,7 +2153,6 @@ async function handleApi(
           ) =>
             total +
             item.totalSeconds,
-
           0
         ),
 
@@ -1910,16 +2160,14 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // ACTIVITY HISTORY
-  // ====================================================
+  /* ==================================================
+     ACTIVITY HISTORY
+     ================================================== */
 
   const activityHistoryMatch =
     pathname.match(
       /^\/api\/activity-history\/([^/]+)$/
     );
-
 
   if (
     method === 'GET' &&
@@ -1929,7 +2177,6 @@ async function handleApi(
       decodeURIComponent(
         activityHistoryMatch[1]
       );
-
 
     const employee =
       await env.DB
@@ -1944,19 +2191,16 @@ async function handleApi(
         )
         .first();
 
-
     if (!employee) {
       return json(
         {
           success: false,
-
           error:
             'Employee not found.',
         },
         404
       );
     }
-
 
     const trackerResult =
       await env.DB
@@ -1973,10 +2217,8 @@ async function handleApi(
         )
         .all();
 
-
     const byDate =
       new Map();
-
 
     for (
       const row of
@@ -2000,10 +2242,6 @@ async function handleApi(
       );
     }
 
-
-    // Screenshot count comes from D1.
-    // No KV list() call.
-
     const screenshotCounts =
       await env.DB
         .prepare(`
@@ -2019,7 +2257,6 @@ async function handleApi(
         )
         .all();
 
-
     for (
       const row of
       screenshotCounts.results ||
@@ -2028,7 +2265,6 @@ async function handleApi(
       const dateKey =
         row.date_key;
 
-
       if (
         !isDateKey(
           dateKey
@@ -2036,7 +2272,6 @@ async function handleApi(
       ) {
         continue;
       }
-
 
       if (
         !byDate.has(
@@ -2057,7 +2292,6 @@ async function handleApi(
         );
       }
 
-
       byDate.get(
         dateKey
       ).screenshotCount =
@@ -2066,7 +2300,6 @@ async function handleApi(
           0
         );
     }
-
 
     const records =
       Array.from(
@@ -2077,12 +2310,10 @@ async function handleApi(
             a,
             b
           ) =>
-            b.dateKey
-              .localeCompare(
-                a.dateKey
-              )
+            b.dateKey.localeCompare(
+              a.dateKey
+            )
         );
-
 
     return json({
       success: true,
@@ -2096,16 +2327,14 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // ACTIVITY FOR DATE
-  // ====================================================
+  /* ==================================================
+     ACTIVITY FOR DATE
+     ================================================== */
 
   const activityMatch =
     pathname.match(
       /^\/api\/activity\/([^/]+)\/(\d{4}-\d{2}-\d{2})$/
     );
-
 
   if (
     method === 'GET' &&
@@ -2116,10 +2345,8 @@ async function handleApi(
         activityMatch[1]
       );
 
-
     const dateKey =
       activityMatch[2];
-
 
     const employee =
       await env.DB
@@ -2134,19 +2361,16 @@ async function handleApi(
         )
         .first();
 
-
     if (!employee) {
       return json(
         {
           success: false,
-
           error:
             'Employee not found.',
         },
         404
       );
     }
-
 
     const record =
       await env.DB
@@ -2163,7 +2387,6 @@ async function handleApi(
         )
         .first();
 
-
     const screenshotRows =
       await env.DB
         .prepare(`
@@ -2179,50 +2402,47 @@ async function handleApi(
         )
         .all();
 
-
     const items =
       (
         screenshotRows.results ||
         []
-      )
-        .map(
-          (row) => ({
-            id:
-              row.storage_key,
+      ).map(
+        (row) => ({
+          id:
+            row.storage_key,
 
-            fileName:
-              row.file_name,
+          fileName:
+            row.file_name,
 
-            userId:
-              employee.id,
+          userId:
+            employee.id,
 
-            userName:
-              employee.name,
+          userName:
+            employee.name,
 
-            employeeId:
-              employee.id,
+          employeeId:
+            employee.id,
 
-            employeeName:
-              employee.name,
+          employeeName:
+            employee.name,
 
-            email:
-              employee.email,
+          email:
+            employee.email,
 
-            dateKey,
+          dateKey,
 
-            uploadedAt:
-              row.uploaded_at,
+          uploadedAt:
+            row.uploaded_at,
 
-            localUrl:
-              `${url.origin}/api/screenshot-file?key=${encodeURIComponent(
-                row.storage_key
-              )}`,
+          localUrl:
+            `${url.origin}/api/screenshot-file?key=${encodeURIComponent(
+              row.storage_key
+            )}`,
 
-            filePath:
-              row.storage_key,
-          })
-        );
-
+          filePath:
+            row.storage_key,
+        })
+      );
 
     return json({
       success: true,
@@ -2236,8 +2456,7 @@ async function handleApi(
 
       totalSeconds:
         Number(
-          record
-            ?.total_seconds ||
+          record?.total_seconds ||
           0
         ),
 
@@ -2249,10 +2468,9 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // ADMIN ACTIVITY SUMMARY
-  // ====================================================
+  /* ==================================================
+     ADMIN ACTIVITY SUMMARY
+     ================================================== */
 
   if (
     method === 'GET' &&
@@ -2262,15 +2480,12 @@ async function handleApi(
     const today =
       indiaDateKey();
 
-
     const requestedMonth =
       String(
         url.searchParams.get(
           'month'
-        ) ||
-        ''
+        ) || ''
       );
-
 
     const selectedMonth =
       /^\d{4}-\d{2}$/.test(
@@ -2278,7 +2493,6 @@ async function handleApi(
       )
         ? requestedMonth
         : monthKey();
-
 
     const employeesResult =
       await env.DB
@@ -2290,11 +2504,17 @@ async function handleApi(
         `)
         .all();
 
+    const summaries = [];
 
-    const summaries =
-      [];
-
-    await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
+    /*
+      Make sure tracker event table exists
+      before querying it.
+    */
+    await env.DB
+      .prepare(
+        TRACKER_EVENT_TABLE_SQL
+      )
+      .run();
 
     for (
       const employee of
@@ -2315,7 +2535,6 @@ async function handleApi(
           )
           .first();
 
-
       const monthResult =
         await env.DB
           .prepare(`
@@ -2334,7 +2553,6 @@ async function handleApi(
           )
           .first();
 
-
       const todayScreenshots =
         await countScreenshots(
           env,
@@ -2342,19 +2560,44 @@ async function handleApi(
           today
         );
 
+      const eventResult =
+        await env.DB
+          .prepare(`
+            SELECT
+              id,
+              event_type,
+              event_at,
+              date_key
+            FROM tracker_events
+            WHERE employee_id = ?
+              AND date_key = ?
+            ORDER BY event_at ASC
+          `)
+          .bind(
+            employee.id,
+            today
+          )
+          .all();
 
-      const eventResult = await env.DB.prepare(`
-        SELECT id, event_type, event_at, date_key
-        FROM tracker_events
-        WHERE employee_id = ? AND date_key = ?
-        ORDER BY event_at ASC
-      `).bind(employee.id, today).all();
-      const trackerEvents = (eventResult.results || []).map((event) => ({
-        id: event.id,
-        eventType: event.event_type,
-        eventAt: event.event_at,
-        dateKey: event.date_key,
-      }));
+      const trackerEvents =
+        (
+          eventResult.results ||
+          []
+        ).map(
+          (event) => ({
+            id:
+              event.id,
+
+            eventType:
+              event.event_type,
+
+            eventAt:
+              event.event_at,
+
+            dateKey:
+              event.date_key,
+          })
+        );
 
       summaries.push({
         employeeId:
@@ -2364,12 +2607,10 @@ async function handleApi(
           employee.name,
 
         firstName:
-          employee.first_name ||
-          '',
+          employee.first_name || '',
 
         lastName:
-          employee.last_name ||
-          '',
+          employee.last_name || '',
 
         email:
           employee.email,
@@ -2381,22 +2622,21 @@ async function handleApi(
 
         todaySeconds:
           Number(
-            todayRecord
-              ?.total_seconds ||
+            todayRecord?.total_seconds ||
             0
           ),
 
         monthlySeconds:
           Number(
-            monthResult
-              ?.total ||
+            monthResult?.total ||
             0
           ),
 
         todayScreenshots,
+
+        trackerEvents,
       });
     }
-
 
     return json({
       success: true,
@@ -2411,10 +2651,9 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // CAPTURE SETTINGS GET
-  // ====================================================
+  /* ==================================================
+     CAPTURE SETTINGS GET
+     ================================================== */
 
   if (
     method === 'GET' &&
@@ -2430,7 +2669,6 @@ async function handleApi(
         `)
         .first();
 
-
     return json({
       success: true,
 
@@ -2441,15 +2679,13 @@ async function handleApi(
 
         captureWindowSeconds:
           Number(
-            row
-              ?.capture_window_seconds ||
+            row?.capture_window_seconds ||
             600
           ),
 
         screenshotsPerWindow:
           Number(
-            row
-              ?.screenshots_per_window ||
+            row?.screenshots_per_window ||
             5
           ),
 
@@ -2459,29 +2695,24 @@ async function handleApi(
 
         lockIntervalForEmployees:
           Boolean(
-            row
-              ?.lock_interval_for_employees ??
+            row?.lock_interval_for_employees ??
             1
           ),
 
         captureIntervalSeconds:
           Number(
-            row
-              ?.capture_window_seconds ||
+            row?.capture_window_seconds ||
             600
           ),
 
         autoCaptureIntervalMinutes:
           Math.max(
             1,
-
             Math.round(
               Number(
-                row
-                  ?.capture_window_seconds ||
+                row?.capture_window_seconds ||
                 600
-              ) /
-              60
+              ) / 60
             )
           ),
 
@@ -2495,17 +2726,15 @@ async function handleApi(
         ],
 
         updatedAt:
-          row
-            ?.updated_at ||
+          row?.updated_at ||
           null,
       },
     });
   }
 
-
-  // ====================================================
-  // CAPTURE SETTINGS SAVE
-  // ====================================================
+  /* ==================================================
+     CAPTURE SETTINGS SAVE
+     ================================================== */
 
   if (
     method === 'POST' &&
@@ -2513,10 +2742,7 @@ async function handleApi(
       '/api/capture-settings'
   ) {
     const body =
-      await parseBody(
-        request
-      );
-
+      await parseBody(request);
 
     let windowSeconds =
       Math.floor(
@@ -2527,7 +2753,6 @@ async function handleApi(
         )
       );
 
-
     let screenshots =
       Math.floor(
         Number(
@@ -2536,28 +2761,23 @@ async function handleApi(
         )
       );
 
-
     windowSeconds =
       Math.max(
         5,
-
         Math.min(
           windowSeconds,
           86400
         )
       );
 
-
     screenshots =
       Math.max(
         1,
-
         Math.min(
           screenshots,
           500
         )
       );
-
 
     const presetId =
       String(
@@ -2565,18 +2785,14 @@ async function handleApi(
         'custom'
       );
 
-
     const locked =
       body.lockIntervalForEmployees ===
       false
         ? 0
         : 1;
 
-
     const updatedAt =
-      new Date()
-        .toISOString();
-
+      new Date().toISOString();
 
     await env.DB
       .prepare(`
@@ -2590,14 +2806,26 @@ async function handleApi(
           updated_at
         )
         VALUES (1, ?, ?, ?, ?, ?, ?)
+
         ON CONFLICT(id)
         DO UPDATE SET
-          capture_mode = excluded.capture_mode,
-          capture_window_seconds = excluded.capture_window_seconds,
-          screenshots_per_window = excluded.screenshots_per_window,
-          preset_id = excluded.preset_id,
-          lock_interval_for_employees = excluded.lock_interval_for_employees,
-          updated_at = excluded.updated_at
+          capture_mode =
+            excluded.capture_mode,
+
+          capture_window_seconds =
+            excluded.capture_window_seconds,
+
+          screenshots_per_window =
+            excluded.screenshots_per_window,
+
+          preset_id =
+            excluded.preset_id,
+
+          lock_interval_for_employees =
+            excluded.lock_interval_for_employees,
+
+          updated_at =
+            excluded.updated_at
       `)
       .bind(
         'random_count_window',
@@ -2608,7 +2836,6 @@ async function handleApi(
         updatedAt
       )
       .run();
-
 
     return json({
       success: true,
@@ -2626,9 +2853,7 @@ async function handleApi(
         presetId,
 
         lockIntervalForEmployees:
-          Boolean(
-            locked
-          ),
+          Boolean(locked),
 
         captureIntervalSeconds:
           windowSeconds,
@@ -2636,10 +2861,8 @@ async function handleApi(
         autoCaptureIntervalMinutes:
           Math.max(
             1,
-
             Math.round(
-              windowSeconds /
-              60
+              windowSeconds / 60
             )
           ),
 
@@ -2657,27 +2880,30 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // SCREENSHOT UPLOAD - KV + D1 INDEX
-  // ====================================================
+  /* ==================================================
+     SCREENSHOT UPLOAD
+     ================================================== */
 
   if (
     method === 'POST' &&
     pathname ===
       '/api/upload-screenshot'
   ) {
-    if (!isScreenshotUploadWindowOpen()) {
-      return json({
-        success: false,
-        paused: true,
-        error: 'Screenshot sharing is paused outside 08:30 AM–08:30 PM IST.',
-      }, 429);
+    if (
+      !isScreenshotUploadWindowOpen()
+    ) {
+      return json(
+        {
+          success: false,
+          paused: true,
+          error:
+            'Screenshot sharing is paused outside 08:30 AM–08:30 PM IST.',
+        },
+        429
+      );
     }
 
-    if (
-      !env.SCREENSHOTS
-    ) {
+    if (!env.SCREENSHOTS) {
       return json(
         {
           success: false,
@@ -2692,56 +2918,43 @@ async function handleApi(
       );
     }
 
-
     const form =
       await request.formData();
 
-
     const file =
-      form.get(
-        'file'
-      );
-
+      form.get('file');
 
     const employeeId =
       String(
         form.get(
           'employeeId'
-        ) ||
-        ''
+        ) || ''
       ).trim();
-
 
     const requestedFileName =
       String(
         form.get(
           'fileName'
-        ) ||
-        ''
+        ) || ''
       ).trim();
-
 
     const requestedDateKey =
       String(
         form.get(
           'dateKey'
-        ) ||
-        ''
+        ) || ''
       ).trim();
-
 
     if (!employeeId) {
       return json(
         {
           success: false,
-
           error:
             'employeeId is required.',
         },
         400
       );
     }
-
 
     if (
       !(
@@ -2752,14 +2965,12 @@ async function handleApi(
       return json(
         {
           success: false,
-
           error:
             'Screenshot file is required.',
         },
         400
       );
     }
-
 
     const employee =
       await env.DB
@@ -2774,12 +2985,10 @@ async function handleApi(
         )
         .first();
 
-
     if (!employee) {
       return json(
         {
           success: false,
-
           error:
             'Employee not found.',
         },
@@ -2787,15 +2996,15 @@ async function handleApi(
       );
     }
 
-
-    const stored = await storeScreenshot(
-      env,
-      employee,
-      file,
-      requestedFileName,
-      requestedDateKey,
-      url.origin
-    );
+    const stored =
+      await storeScreenshot(
+        env,
+        employee,
+        file,
+        requestedFileName,
+        requestedDateKey,
+        url.origin
+      );
 
     return json({
       success: true,
@@ -2803,68 +3012,152 @@ async function handleApi(
     });
   }
 
-  // ====================================================
-  // SCREENSHOT BATCH UPLOAD - HOURLY QUEUE
-  // ====================================================
+  /* ==================================================
+     SCREENSHOT BATCH UPLOAD
+     ================================================== */
 
   if (
     method === 'POST' &&
-    pathname === '/api/upload-screenshot-batch'
+    pathname ===
+      '/api/upload-screenshot-batch'
   ) {
-    if (!isScreenshotUploadWindowOpen()) {
-      return json({
-        success: false,
-        paused: true,
-        error: 'Screenshot sharing is paused outside 08:30 AM–08:30 PM IST.',
-      }, 429);
+    if (
+      !isScreenshotUploadWindowOpen()
+    ) {
+      return json(
+        {
+          success: false,
+          paused: true,
+          error:
+            'Screenshot sharing is paused outside 08:30 AM–08:30 PM IST.',
+        },
+        429
+      );
     }
 
     if (!env.SCREENSHOTS) {
-      return json({
-        success: false,
-        screenshotStorageDisabled: true,
-        error: 'Screenshot KV binding is missing. Add the SCREENSHOTS KV namespace binding in wrangler.jsonc.',
-      }, 501);
+      return json(
+        {
+          success: false,
+
+          screenshotStorageDisabled:
+            true,
+
+          error:
+            'Screenshot KV binding is missing. Add the SCREENSHOTS KV namespace binding in wrangler.jsonc.',
+        },
+        501
+      );
     }
 
-    const form = await request.formData();
-    const files = form.getAll('files').filter((value) => value instanceof File);
+    const form =
+      await request.formData();
+
+    const files =
+      form
+        .getAll('files')
+        .filter(
+          (value) =>
+            value instanceof File
+        );
+
     let metadata = [];
 
     try {
-      const parsed = JSON.parse(String(form.get('metadata') || '[]'));
-      metadata = Array.isArray(parsed) ? parsed : [];
+      const parsed =
+        JSON.parse(
+          String(
+            form.get(
+              'metadata'
+            ) || '[]'
+          )
+        );
+
+      metadata =
+        Array.isArray(parsed)
+          ? parsed
+          : [];
     } catch {
-      return json({ success: false, error: 'Invalid screenshot batch metadata.' }, 400);
+      return json(
+        {
+          success: false,
+          error:
+            'Invalid screenshot batch metadata.',
+        },
+        400
+      );
     }
 
-    if (!files.length || !metadata.length || files.length !== metadata.length) {
-      return json({
-        success: false,
-        error: 'Screenshot batch is empty or metadata does not match the file count.',
-      }, 400);
+    if (
+      !files.length ||
+      !metadata.length ||
+      files.length !==
+        metadata.length
+    ) {
+      return json(
+        {
+          success: false,
+          error:
+            'Screenshot batch is empty or metadata does not match the file count.',
+        },
+        400
+      );
     }
 
     const uploadedIds = [];
     const failed = [];
 
-    for (let index = 0; index < files.length; index += 1) {
-      const item = metadata[index] || {};
-      const employeeId = String(item.employeeId || '').trim();
-      const queueId = String(item.queueId || '').trim();
+    for (
+      let index = 0;
+      index < files.length;
+      index += 1
+    ) {
+      const item =
+        metadata[index] || {};
 
-      if (!employeeId || !queueId) {
-        failed.push({ queueId, error: 'employeeId and queueId are required.' });
+      const employeeId =
+        String(
+          item.employeeId || ''
+        ).trim();
+
+      const queueId =
+        String(
+          item.queueId || ''
+        ).trim();
+
+      if (
+        !employeeId ||
+        !queueId
+      ) {
+        failed.push({
+          queueId,
+          error:
+            'employeeId and queueId are required.',
+        });
+
         continue;
       }
 
-      const employee = await env.DB
-        .prepare(`SELECT * FROM employees WHERE id = ? LIMIT 1`)
-        .bind(employeeId)
-        .first();
+      const employee =
+        await env.DB
+          .prepare(`
+            SELECT *
+            FROM employees
+            WHERE id = ?
+            LIMIT 1
+          `)
+          .bind(
+            employeeId
+          )
+          .first();
 
       if (!employee) {
-        failed.push({ queueId, error: 'Employee not found.' });
+        failed.push({
+          queueId,
+          error:
+            'Employee not found.',
+        });
+
         continue;
       }
 
@@ -2873,29 +3166,57 @@ async function handleApi(
           env,
           employee,
           files[index],
-          String(item.fileName || files[index].name || ''),
-          String(item.dateKey || ''),
+          String(
+            item.fileName ||
+            files[index].name ||
+            ''
+          ),
+          String(
+            item.dateKey || ''
+          ),
           url.origin
         );
-        uploadedIds.push(queueId);
+
+        uploadedIds.push(
+          queueId
+        );
       } catch (error) {
-        failed.push({ queueId, error: error?.message || 'Screenshot upload failed.' });
+        failed.push({
+          queueId,
+
+          error:
+            error?.message ||
+            'Screenshot upload failed.',
+        });
       }
     }
 
-    return json({
-      success: uploadedIds.length > 0 || failed.length === 0,
-      uploadedIds,
-      uploadedCount: uploadedIds.length,
-      failedCount: failed.length,
-      failed,
-    }, uploadedIds.length || failed.length === 0 ? 200 : 500);
+    return json(
+      {
+        success:
+          uploadedIds.length > 0 ||
+          failed.length === 0,
+
+        uploadedIds,
+
+        uploadedCount:
+          uploadedIds.length,
+
+        failedCount:
+          failed.length,
+
+        failed,
+      },
+      uploadedIds.length ||
+        failed.length === 0
+        ? 200
+        : 500
+    );
   }
 
-
-  // ====================================================
-  // SCREENSHOT BINARY FILE
-  // ====================================================
+  /* ==================================================
+     SCREENSHOT BINARY FILE
+     ================================================== */
 
   if (
     method === 'GET' &&
@@ -2913,12 +3234,10 @@ async function handleApi(
       );
     }
 
-
     const key =
       url.searchParams.get(
         'key'
       );
-
 
     if (!key) {
       return new Response(
@@ -2929,14 +3248,12 @@ async function handleApi(
       );
     }
 
-
     const result =
       await env.SCREENSHOTS
         .getWithMetadata(
           key,
           'arrayBuffer'
         );
-
 
     if (!result.value) {
       return new Response(
@@ -2946,7 +3263,6 @@ async function handleApi(
         }
       );
     }
-
 
     return new Response(
       result.value,
@@ -2969,16 +3285,14 @@ async function handleApi(
     );
   }
 
-
-  // ====================================================
-  // SCREENSHOT LIST - D1
-  // ====================================================
+  /* ==================================================
+     SCREENSHOT LIST
+     ================================================== */
 
   const screenshotsMatch =
     pathname.match(
       /^\/api\/screenshots\/([^/]+)\/(\d{4}-\d{2}-\d{2})$/
     );
-
 
   if (
     method === 'GET' &&
@@ -2989,10 +3303,8 @@ async function handleApi(
         screenshotsMatch[1]
       );
 
-
     const dateKey =
       screenshotsMatch[2];
-
 
     const employee =
       await env.DB
@@ -3007,19 +3319,16 @@ async function handleApi(
         )
         .first();
 
-
     if (!employee) {
       return json(
         {
           success: false,
-
           error:
             'Employee not found.',
         },
         404
       );
     }
-
 
     const result =
       await env.DB
@@ -3036,46 +3345,43 @@ async function handleApi(
         )
         .all();
 
-
     const items =
       (
         result.results ||
         []
-      )
-        .map(
-          (row) => ({
-            fileName:
-              row.file_name,
+      ).map(
+        (row) => ({
+          fileName:
+            row.file_name,
 
-            filePath:
-              row.storage_key,
+          filePath:
+            row.storage_key,
 
-            employeeId,
+          employeeId,
 
-            employeeName:
-              employee.name,
+          employeeName:
+            employee.name,
 
-            email:
-              employee.email,
+          email:
+            employee.email,
 
-            monthFolder:
-              dateKey.slice(
-                0,
-                7
-              ),
+          monthFolder:
+            dateKey.slice(
+              0,
+              7
+            ),
 
-            dateKey,
+          dateKey,
 
-            localUrl:
-              `${url.origin}/api/screenshot-file?key=${encodeURIComponent(
-                row.storage_key
-              )}`,
+          localUrl:
+            `${url.origin}/api/screenshot-file?key=${encodeURIComponent(
+              row.storage_key
+            )}`,
 
-            uploadedAt:
-              row.uploaded_at,
-          })
-        );
-
+          uploadedAt:
+            row.uploaded_at,
+        })
+      );
 
     return json({
       success: true,
@@ -3109,10 +3415,9 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // DELETE SCREENSHOT
-  // ====================================================
+  /* ==================================================
+     DELETE SCREENSHOT
+     ================================================== */
 
   if (
     method === 'DELETE' &&
@@ -3133,12 +3438,8 @@ async function handleApi(
       );
     }
 
-
     const body =
-      await parseBody(
-        request
-      );
-
+      await parseBody(request);
 
     const filePath =
       String(
@@ -3147,12 +3448,10 @@ async function handleApi(
         ''
       ).trim();
 
-
     if (!filePath) {
       return json(
         {
           success: false,
-
           error:
             'filePath is required.',
         },
@@ -3160,11 +3459,9 @@ async function handleApi(
       );
     }
 
-
     await env.SCREENSHOTS.delete(
       filePath
     );
-
 
     await env.DB
       .prepare(`
@@ -3176,7 +3473,6 @@ async function handleApi(
       )
       .run();
 
-
     return json({
       success: true,
 
@@ -3185,10 +3481,9 @@ async function handleApi(
     });
   }
 
-
-  // ====================================================
-  // API NOT FOUND
-  // ====================================================
+  /* ==================================================
+     API NOT FOUND
+     ================================================== */
 
   return json(
     {
@@ -3201,10 +3496,9 @@ async function handleApi(
   );
 }
 
-
-// ====================================================
-// WORKER
-// ====================================================
+/* ====================================================
+   WORKER
+   ==================================================== */
 
 export default {
   async fetch(
@@ -3212,10 +3506,7 @@ export default {
     env
   ) {
     const url =
-      new URL(
-        request.url
-      );
-
+      new URL(request.url);
 
     if (
       url.pathname.startsWith(
@@ -3227,7 +3518,6 @@ export default {
           request,
           env
         );
-
       } catch (
         error
       ) {
@@ -3236,21 +3526,18 @@ export default {
           error
         );
 
-
         return json(
           {
             success: false,
 
             error:
-              error
-                ?.message ||
+              error?.message ||
               'Internal server error.',
           },
           500
         );
       }
     }
-
 
     return env.ASSETS.fetch(
       request
