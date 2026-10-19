@@ -197,13 +197,6 @@ const releaseFlushLock = (): void => {
 };
 
 /* ========================================================================== 
-   NGROK / COMPATIBILITY HEADERS
-========================================================================== */
-
-const getNgrokHeaders = (): Record<string, string> => ({
-});
-
-/* ========================================================================== 
    SAVE SCREENSHOT LOCALLY
 
    IMPORTANT: This function intentionally DOES NOT call Cloudflare.
@@ -291,9 +284,6 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
 
       const response = await fetch(`${backendUrl}/api/upload-screenshot-batch`, {
         method: 'POST',
-        headers: {
-          ...getNgrokHeaders(),
-        },
         body: formData,
       });
 
@@ -367,48 +357,25 @@ export async function getLocalScreenshots(
   employeeId: string,
   dateKey: string
 ): Promise<LocalScreenshotItem[]> {
-  // Restore screenshots that have not reached Cloudflare yet. The Blob stays
-  // in IndexedDB; an object URL lets the current page display it after refresh.
-  const queued = await getQueuedScreenshots();
-  const localItems: LocalScreenshotItem[] = queued
-    .filter((item) => item.employeeId === employeeId && item.dateKey === dateKey && item.blob instanceof Blob)
-    .map((item) => ({
-      fileName: item.fileName,
-      employeeId: item.employeeId,
-      employeeName: item.employeeName,
-      folderKey: `${item.employeeId}/${item.dateKey}`,
-      dateKey: item.dateKey,
-      localUrl: URL.createObjectURL(item.blob),
-    }));
+  const backendUrl = getBackendUrl();
 
-  // Cloud history is useful after a successful upload has removed the local
-  // queue record. If the Worker is temporarily unavailable, still show local
-  // pending screenshots instead of replacing the whole history with an error.
-  try {
-    const backendUrl = getBackendUrl();
-    const response = await fetch(
-      `${backendUrl}/api/screenshots/${encodeURIComponent(employeeId)}/${encodeURIComponent(dateKey)}`,
-      {
-        method: 'GET',
-        cache: 'no-store',
-        headers: { ...getNgrokHeaders() },
-      }
-    );
-
-    if (!response.ok) {
-      console.warn(`Unable to load cloud screenshots (${response.status}); showing local queue items.`);
-      return localItems;
+  const response = await fetch(
+    `${backendUrl}/api/screenshots/${encodeURIComponent(employeeId)}/${encodeURIComponent(dateKey)}`,
+    {
+      method: 'GET',
+      cache: 'no-store',
     }
+  );
 
-    const data = await response.json();
-    const cloudItems: LocalScreenshotItem[] = Array.isArray(data?.items) ? data.items : [];
-    const cloudNames = new Set(cloudItems.map((item) => `${item.dateKey || dateKey}/${item.fileName}`));
-    const uniqueLocal = localItems.filter((item) => !cloudNames.has(`${item.dateKey}/${item.fileName}`));
-    return [...cloudItems, ...uniqueLocal];
-  } catch (error) {
-    console.warn('Cloud screenshot history unavailable; showing local queue items.', error);
-    return localItems;
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(
+      `Unable to load screenshots: ${response.status} - ${errorText}`
+    );
   }
+
+  const data = await response.json();
+  return Array.isArray(data?.items) ? data.items : [];
 }
 
 /* ========================================================================== 
@@ -422,7 +389,6 @@ export async function deleteLocalScreenshot(filePath: string): Promise<void> {
     method: 'DELETE',
     headers: {
       'Content-Type': 'application/json',
-      ...getNgrokHeaders(),
     },
     body: JSON.stringify({ filePath }),
   });
@@ -435,4 +401,4 @@ export async function deleteLocalScreenshot(filePath: string): Promise<void> {
 
 export function getLocalBackendUrl(): string {
   return getBackendUrl();
-} 
+}
