@@ -83,6 +83,25 @@ function indiaDateKey(date = new Date()) {
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
+const SCREENSHOT_INDEX_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS screenshot_index (
+    id TEXT PRIMARY KEY,
+    employee_id TEXT NOT NULL,
+    employee_name TEXT,
+    email TEXT,
+    date_key TEXT NOT NULL,
+    file_name TEXT NOT NULL,
+    storage_key TEXT NOT NULL UNIQUE,
+    content_type TEXT NOT NULL DEFAULT 'image/webp',
+    uploaded_at TEXT NOT NULL
+  )
+`;
+
+const SCREENSHOT_INDEX_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_screenshot_index_employee_date
+  ON screenshot_index (employee_id, date_key)
+`;
+
 const TRACKER_EVENT_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS tracker_events (
     id TEXT PRIMARY KEY,
@@ -133,6 +152,10 @@ function isScreenshotUploadWindowOpen(date = new Date()) {
 }
 
 async function storeScreenshot(env, employee, file, requestedFileName, requestedDateKey, origin) {
+  // Ensure the D1 screenshot index exists before writing screenshot metadata.
+  // Older databases may not have had this table created by schema.sql.
+  await env.DB.prepare(SCREENSHOT_INDEX_TABLE_SQL).run();
+  await env.DB.prepare(SCREENSHOT_INDEX_INDEX_SQL).run();
   const dateKey = isDateKey(requestedDateKey) ? requestedDateKey : todayKey();
   const fileName = safeFileName(requestedFileName || file.name, `Screen_${Date.now()}.webp`);
   const uniqueId = crypto.randomUUID();
@@ -272,7 +295,7 @@ async function handleApi(
     );
 
   const pathname =
-    url.pathname;
+    url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
 
   const method =
     request.method;
@@ -2879,6 +2902,11 @@ async function handleApi(
         );
         uploadedIds.push(queueId);
       } catch (error) {
+        console.error('Screenshot batch item upload failed:', {
+          queueId,
+          employeeId,
+          message: error?.message || String(error),
+        });
         failed.push({ queueId, error: error?.message || 'Screenshot upload failed.' });
       }
     }
