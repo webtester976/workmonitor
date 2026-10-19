@@ -24,10 +24,16 @@ export function formatTimeString(date: Date = new Date()): string {
 }
 
 export function getTodayDateKey(date: Date = new Date()): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
+  // WorkMonitor daily totals must use the same timezone as the Cloudflare Worker.
+  // Do not rely on the employee PC's local timezone or clock settings.
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value || '';
+  return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
 export function getHourSlotKey(date: Date = new Date()): string {
