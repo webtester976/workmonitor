@@ -1615,10 +1615,11 @@ export const EmployeeDashboard:
     };
 
   // ====================================================
-  // CAPTURE POLICY REFRESH (FOCUS/VISIBILITY ONLY)
+  // CAPTURE POLICY REFRESH
   // ====================================================
-  // Admin changes are picked up when the employee returns to the tab.
-  // There is deliberately no interval polling.
+  // Admin changes are also refreshed automatically while the employee
+  // dashboard is open. This keeps the screenshot interval/count in sync
+  // without requiring a manual page refresh.
   const refreshCapturePolicy = async () => {
     const now = Date.now();
 
@@ -1627,7 +1628,7 @@ export const EmployeeDashboard:
     if (
       now -
         capturePolicyRefreshAtRef.current <
-      30000
+      5000
     ) {
       return;
     }
@@ -1715,33 +1716,32 @@ export const EmployeeDashboard:
 
   useEffect(() => {
     const handleVisibilityOrFocus = () => {
-      if (
-        document.visibilityState === 'visible'
-      ) {
+      if (document.visibilityState === 'visible') {
         void refreshCapturePolicy();
       }
     };
 
-    window.addEventListener(
-      'focus',
-      handleVisibilityOrFocus
-    );
-    document.addEventListener(
-      'visibilitychange',
-      handleVisibilityOrFocus
-    );
+    // Fetch once immediately so the employee gets the current admin policy
+    // instead of relying only on the old localStorage value.
+    void refreshCapturePolicy();
+
+    window.addEventListener('focus', handleVisibilityOrFocus);
+    document.addEventListener('visibilitychange', handleVisibilityOrFocus);
+
+    // Keep the employee dashboard synchronized with Admin changes.
+    // refreshCapturePolicy has a 5-second guard, so this is lightweight.
+    const policyTimer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        void refreshCapturePolicy();
+      }
+    }, 10000);
 
     return () => {
-      window.removeEventListener(
-        'focus',
-        handleVisibilityOrFocus
-      );
-      document.removeEventListener(
-        'visibilitychange',
-        handleVisibilityOrFocus
-      );
+      window.removeEventListener('focus', handleVisibilityOrFocus);
+      document.removeEventListener('visibilitychange', handleVisibilityOrFocus);
+      window.clearInterval(policyTimer);
     };
-  }, [backendUrl, capturePresetId, centralPolicyUpdatedAt]);
+  }, [backendUrl]);
 
   // ====================================================
   // HOURLY CLOUD UPLOAD QUEUE
