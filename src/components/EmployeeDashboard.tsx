@@ -413,6 +413,11 @@ export const EmployeeDashboard:
       number | null
     >(null);
 
+  // Use wall-clock deltas instead of assuming each browser interval fires
+  // exactly once per second. Browsers throttle intervals in background tabs,
+  // which otherwise makes the employee timer appear late.
+  const trackerLastTickAtRef = useRef<number>(Date.now());
+
   // Central D1 tracker sync runs only once per minute while actively tracking.
   const trackerSyncIntervalRef =
     useRef<
@@ -818,57 +823,39 @@ export const EmployeeDashboard:
   // ====================================================
 
   useEffect(() => {
-    if (
-      isTracking &&
-      !isPaused
-    ) {
-      trackerTimerRef.current =
-        window.setInterval(
-          () => {
-            setSessionSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
+    if (isTracking && !isPaused) {
+      // Reset the baseline whenever tracking starts/resumes. This avoids
+      // counting time spent paused as tracked time.
+      trackerLastTickAtRef.current = Date.now();
 
-            setDayTotalSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
-          },
-          1000
-        );
-    } else {
-      if (
-        trackerTimerRef.current
-      ) {
-        clearInterval(
-          trackerTimerRef.current
+      trackerTimerRef.current = window.setInterval(() => {
+        const now = Date.now();
+        const elapsedWholeSeconds = Math.floor(
+          (now - trackerLastTickAtRef.current) / 1000
         );
 
-        trackerTimerRef.current =
-          null;
-      }
+        if (elapsedWholeSeconds < 1) return;
+
+        // Advance by real elapsed time, not by the number of interval calls.
+        // This catches up after Chrome throttles a background tab.
+        trackerLastTickAtRef.current += elapsedWholeSeconds * 1000;
+        daySecondsRef.current += elapsedWholeSeconds;
+
+        setSessionSeconds((previous) => previous + elapsedWholeSeconds);
+        setDayTotalSeconds((previous) => previous + elapsedWholeSeconds);
+      }, 1000);
+    } else if (trackerTimerRef.current !== null) {
+      window.clearInterval(trackerTimerRef.current);
+      trackerTimerRef.current = null;
     }
 
     return () => {
-      if (
-        trackerTimerRef.current
-      ) {
-        clearInterval(
-          trackerTimerRef.current
-        );
+      if (trackerTimerRef.current !== null) {
+        window.clearInterval(trackerTimerRef.current);
+        trackerTimerRef.current = null;
       }
     };
-  }, [
-    isTracking,
-    isPaused,
-  ]);
+  }, [isTracking, isPaused]);
 
   // ====================================================
   // PERIODIC CENTRAL TRACKER SYNC
