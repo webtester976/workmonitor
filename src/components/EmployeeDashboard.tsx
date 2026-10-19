@@ -169,17 +169,6 @@ interface ActivityHistoryRecord {
   screenshotCount: number;
 }
 
-interface ScreenshotBlobResult {
-  blob: Blob;
-  mimeType: string;
-  extension: string;
-}
-
-interface LocalScreenshotResult {
-  fileId: string;
-  localUrl: string;
-}
-
 interface EmployeeDashboardProps {
   currentUser: AppUser;
 
@@ -1245,16 +1234,15 @@ export const EmployeeDashboard:
         const format =
           storageSettings.screenshotFormat || 'webp';
 
-        const encoded = await withTimeout<ScreenshotBlobResult>(
-          canvasToBlob(canvas, format) as Promise<ScreenshotBlobResult>,
+        const {
+          blob,
+          mimeType,
+          extension,
+        } = await withTimeout(
+          canvasToBlob(canvas, format),
           15000,
           'Screenshot encoding timed out.'
         );
-
-        const {
-          blob,
-          extension,
-        } = encoded;
 
         if (!blob || blob.size === 0) {
           throw new Error('Screenshot encoding returned an empty image.');
@@ -1273,14 +1261,14 @@ export const EmployeeDashboard:
 
         setLastStatus('Saving screenshot locally...');
 
-        const result = await withTimeout<LocalScreenshotResult>(
+        const result = await withTimeout(
           uploadScreenshotLocally(
             blob,
             fileName,
             currentUser.id,
             currentUser.name,
             dateKey
-          ) as Promise<LocalScreenshotResult>,
+          ),
           15000,
           'Local screenshot save timed out.'
         );
@@ -2726,7 +2714,7 @@ export const EmployeeDashboard:
           </div>
 
           <div className="text-2xl font-black mt-2 text-indigo-600">
-            {selectedDateScreenshotCount}
+            {mergedScreenshots.length}
           </div>
 
         </div>
