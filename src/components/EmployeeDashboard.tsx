@@ -392,6 +392,11 @@ export const EmployeeDashboard:
   const pausedRef =
     useRef(false);
 
+  // Date on which the current tracking session was started. A running
+  // session is never allowed to cross an IST calendar day.
+  const trackingDateRef =
+    useRef<string | null>(null);
+
   const daySecondsRef =
     useRef(0);
 
@@ -575,7 +580,8 @@ export const EmployeeDashboard:
   const syncTrackerTime =
     async (
       seconds =
-        daySecondsRef.current
+        daySecondsRef.current,
+      dateKey = getTodayDateKey()
     ) => {
       try {
         const response =
@@ -598,8 +604,7 @@ export const EmployeeDashboard:
                   employeeName:
                     currentUser.name,
 
-                  dateKey:
-                    getTodayDateKey(),
+                  dateKey,
 
                   totalSeconds:
                     Math.max(
@@ -711,6 +716,71 @@ export const EmployeeDashboard:
   }, [currentUser.id, backendUrl, timerStorageKey]);
 
   // ====================================================
+  // MIDNIGHT / DAY ROLLOVER PROTECTION
+  // ====================================================
+  // A forgotten logout must never carry yesterday's running timer into the
+  // next IST day. The current session is closed at midnight, its final total
+  // is saved against the previous date, and the new day starts from 0.
+  useEffect(() => {
+    if (!isTracking || !trackingDateRef.current) {
+      return;
+    }
+
+    const rolloverInterval = window.setInterval(() => {
+      const sessionDate = trackingDateRef.current;
+      const currentDate = getTodayDateKey();
+
+      if (!sessionDate || currentDate === sessionDate) {
+        return;
+      }
+
+      // Freeze tracking immediately so no further seconds are added to the
+      // previous session while the final D1 write is in progress.
+      trackingRef.current = false;
+      pausedRef.current = false;
+      setIsTracking(false);
+      setIsPaused(false);
+
+      if (trackerTimerRef.current !== null) {
+        window.clearInterval(trackerTimerRef.current);
+        trackerTimerRef.current = null;
+      }
+
+      if (trackerSyncIntervalRef.current !== null) {
+        window.clearInterval(trackerSyncIntervalRef.current);
+        trackerSyncIntervalRef.current = null;
+      }
+
+      clearCaptureTimers();
+      setNextCaptureInSec(null);
+
+      const finalSeconds = Math.max(
+        0,
+        Math.floor(daySecondsRef.current || 0)
+      );
+
+      // Save yesterday's final total using yesterday's date key.
+      void (async () => {
+        await syncTrackerTime(finalSeconds, sessionDate);
+
+        // New day always starts from zero locally. D1 for the new day is not
+        // populated until the employee explicitly presses Start.
+        daySecondsRef.current = 0;
+        setDayTotalSeconds(0);
+        setSessionSeconds(0);
+        trackingDateRef.current = null;
+        setLastStatus(
+          'New day started — tracking stopped automatically. Press Start to begin today.'
+        );
+      })();
+    }, 1000);
+
+    return () => {
+      window.clearInterval(rolloverInterval);
+    };
+  }, [isTracking]);
+
+  // ====================================================
   // TIMER
   // ====================================================
 
@@ -800,10 +870,12 @@ export const EmployeeDashboard:
         () => {
           if (
             trackingRef.current &&
-            !pausedRef.current
+            !pausedRef.current &&
+            trackingDateRef.current === getTodayDateKey()
           ) {
             void syncTrackerTime(
-              daySecondsRef.current
+              daySecondsRef.current,
+              trackingDateRef.current
             );
           }
         },
@@ -2202,6 +2274,8 @@ export const EmployeeDashboard:
       daySecondsRef.current = centralTotalSeconds;
       setDayTotalSeconds(centralTotalSeconds);
 
+      trackingDateRef.current = getTodayDateKey();
+
       trackingRef.current =
         true;
 
@@ -2299,6 +2373,7 @@ export const EmployeeDashboard:
 
       trackingRef.current =
         false;
+      trackingDateRef.current = null;
 
       pausedRef.current =
         false;
