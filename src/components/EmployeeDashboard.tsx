@@ -1,109 +1,96 @@
+import React, {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 
-          </div>
+import {
+  AppUser,
+  ScreenshotLog,
+  StorageSettings,
+} from '../types';
 
-        </div>
+import {
+  Play,
+  Pause,
+  Square,
+  Camera,
+  Calendar,
+  Clock,
+  Monitor,
+  RefreshCw,
+  AlertCircle,
+  X,
+  CheckCircle2,
+} from 'lucide-react';
 
-      </div>
+import {
+  canvasToBlob,
+  formatSecondsToHoursMinutes,
+  formatTimeString,
+  generateThumbnailDataUrl,
+  getHourSlotKey,
+  getTodayDateKey,
+} from '../lib/utils';
 
-      {/* PREVIEW */}
+import {
+  getLocalScreenshots,
+  startScreenshotUploadScheduler,
+  uploadScreenshotLocally,
+} from '../lib/localStorageService';
 
-      {previewModal && (
-        <div
-          className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
-          onClick={() =>
-            setPreviewModal(
-              null
-            )
-          }
-        >
+import {
+  setCachedScreenshot,
+} from '../lib/screenshotCache';
 
-          <div
-            className="w-full max-w-6xl"
-            onClick={(
-              event
-            ) =>
-              event.stopPropagation()
-            }
-          >
+import {
+  ScreenshotViewerImage,
+} from './ScreenshotViewerImage';
 
-            <div className="flex justify-end mb-2">
+// ======================================================
+// BACKEND
+// ======================================================
 
-              <button
-                type="button"
-                onClick={() =>
-                  setPreviewModal(
-                    null
-                  )
-                }
-                className="cursor-pointer p-2 text-white"
-              >
-                <X className="w-6 h-6" />
-              </button>
+const getBackendUrl = (): string => {
+  const configured =
+    import.meta.env.VITE_BACKEND_URL?.trim();
 
-            </div>
+  if (configured) {
+    return configured.replace(/\/$/, '');
+  }
 
-            <div className="bg-white dark:bg-slate-900 rounded-xl overflow-hidden">
-
-              {(() => {
-                const source =
-                  previewModal.driveThumbnailLink ||
-                  previewModal.previewDataUrl ||
-                  '';
-
-                const displayUrl =
-                  employeeScreenshotUrls[source] ||
-                  (source.startsWith('data:') || source.startsWith('blob:')
-                    ? source
-                    : '');
-
-                return displayUrl ? (
-                  <img
-                    src={displayUrl}
-                    alt="Screenshot preview"
-                    className="w-full max-h-[80vh] object-contain bg-slate-950"
-                  />
-                ) : (
-                  <div className="min-h-[320px] flex items-center justify-center bg-slate-950 text-slate-400">
-                    Loading screenshot...
-                  </div>
-                );
-              })()}
-
-              <div className="p-4">
-
-                <div className="font-bold">
-                  {
-                    previewModal.taskName
-                  }
-                </div>
-
-                <div className="text-xs text-slate-500 mt-1">
-                  {
-                    previewModal.timeFormatted
-                  }
-                </div>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-      )}
-
-      {/* HIDDEN VIDEO */}
-
-      <video
-        ref={
-          screenVideoRef
-        }
-        autoPlay
-        muted
-        playsInline
-        className="fixed -top-[9999px] -left-[9999px] w-[320px] h-[180px] opacity-[0.001] pointer-events-none"
-      />
-
-    </div>
-  );
+  return 'https://codesdot-workmonitor.work-nest.workers.dev';
 };
+
+// ====================================================
+// SCREENSHOT CLOUD UPLOAD WINDOW
+// ====================================================
+
+const INDIA_TIME_ZONE = 'Asia/Kolkata';
+const TRACKING_START_MINUTES = 8 * 60 + 30;
+const TRACKING_END_MINUTES = 20 * 60 + 30;
+
+const getIndiaMinutes = (date = new Date()) => {
+  const parts = new Intl.DateTimeFormat('en-IN', {
+    timeZone: INDIA_TIME_ZONE,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const minute = Number(parts.find((part) => part.type === 'minute')?.value || 0);
+  return hour * 60 + minute;
+};
+
+const isScreenshotUploadWindowOpen = (date = new Date()) => {
+  const minutes = getIndiaMinutes(date);
+  return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
+};
+
+// ======================================================
+// SAFE JSON
+// ======================================================
+
+const readApiJson = async (
+  response: Response
