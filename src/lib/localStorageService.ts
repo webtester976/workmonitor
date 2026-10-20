@@ -157,6 +157,35 @@ const deleteQueuedScreenshots = async (ids: string[]): Promise<void> => {
   });
 };
 
+/* ==========================================================================
+   QUEUED (NOT YET UPLOADED) SCREENSHOTS - used to restore the employee's
+   screenshot list after a page refresh.
+========================================================================== */
+
+export interface QueuedScreenshotPreview {
+  queueId: string;
+  fileName: string;
+  dateKey: string;
+  queuedAt: number;
+  blob: Blob;
+}
+
+export async function getQueuedScreenshotPreviews(
+  employeeId: string,
+  dateKey: string
+): Promise<QueuedScreenshotPreview[]> {
+  const items = await getQueuedScreenshots();
+  return items
+    .filter((item) => item.employeeId === employeeId && item.dateKey === dateKey)
+    .map((item) => ({
+      queueId: item.id,
+      fileName: item.fileName,
+      dateKey: item.dateKey,
+      queuedAt: item.queuedAt,
+      blob: item.blob,
+    }));
+}
+
 const getLastUploadAt = (): number => {
   if (typeof window === 'undefined') return 0;
   return Number(window.localStorage.getItem(LAST_UPLOAD_KEY) || 0) || 0;
