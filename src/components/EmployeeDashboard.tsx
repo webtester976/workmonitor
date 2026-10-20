@@ -36,6 +36,7 @@ import {
 
 import {
   getLocalScreenshots,
+  getLocalScreenshotPreviews,
   getQueuedScreenshotPreviews,
   startScreenshotUploadScheduler,
   uploadScreenshotLocally,
@@ -2027,6 +2028,53 @@ export const EmployeeDashboard:
           });
         } catch (error) {
           console.warn('Queued screenshot restore warning:', error);
+        }
+
+        // Permanent browser-local copies are the fallback for refreshes and for
+        // periods when the hourly cloud upload has not completed yet. If a file
+        // is already present in the cloud response, do not add a duplicate local copy.
+        try {
+          const cloudFileNames = new Set(
+            restored.map((item) => item.driveFileId).filter(Boolean)
+          );
+          const localCopies = await getLocalScreenshotPreviews(
+            currentUser.id,
+            selectedDate
+          );
+
+          localCopies.forEach((item) => {
+            if (cloudFileNames.has(item.fileName)) return;
+
+            const m = item.fileName.match(
+              /Screen_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})\.(webp|png|jpg|jpeg)$/i
+            );
+            const when = m
+              ? new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}`)
+              : new Date(item.capturedAt);
+            const ext = item.fileName.toLowerCase().endsWith('.png')
+              ? 'png'
+              : /\.jpe?g$/i.test(item.fileName)
+                ? 'jpg'
+                : 'webp';
+
+            restored.push({
+              id: `local-saved-${item.localId}`,
+              userId: currentUser.id,
+              userName: currentUser.name,
+              userEmail: currentUser.email,
+              taskName: 'Saved on this computer',
+              timestamp: when.toISOString(),
+              timeFormatted: formatTimeString(when),
+              hourKey: getHourSlotKey(when),
+              dateKey: selectedDate,
+              fileFormat: ext,
+              driveFileId: `local-saved:${item.localId}`,
+              driveThumbnailLink: '',
+              previewDataUrl: URL.createObjectURL(item.blob),
+            } as ScreenshotLog);
+          });
+        } catch (error) {
+          console.warn('Local screenshot restore warning:', error);
         }
 
         restored.sort(
