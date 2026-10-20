@@ -151,11 +151,20 @@ function isScreenshotUploadWindowOpen(date = new Date()) {
   return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
 }
 
+// Run the CREATE TABLE/INDEX statements only once per Worker instance.
+// Doing it for every screenshot burned 2 subrequests per file and made large
+// batches hit Cloudflare's subrequest limit.
+let screenshotIndexReady = false;
+
+// Hard cap per request so a batch can never exceed Worker memory/subrequest limits.
+const MAX_FILES_PER_BATCH_REQUEST = 12;
+
 async function storeScreenshot(env, employee, file, requestedFileName, requestedDateKey, origin) {
-  // Ensure the D1 screenshot index exists before writing screenshot metadata.
-  // Older databases may not have had this table created by schema.sql.
-  await env.DB.prepare(SCREENSHOT_INDEX_TABLE_SQL).run();
-  await env.DB.prepare(SCREENSHOT_INDEX_INDEX_SQL).run();
+  if (!screenshotIndexReady) {
+    await env.DB.prepare(SCREENSHOT_INDEX_TABLE_SQL).run();
+    await env.DB.prepare(SCREENSHOT_INDEX_INDEX_SQL).run();
+    screenshotIndexReady = true;
+  }
   const dateKey = isDateKey(requestedDateKey) ? requestedDateKey : todayKey();
   const fileName = safeFileName(requestedFileName || file.name, `Screen_${Date.now()}.webp`);
   const uniqueId = crypto.randomUUID();
@@ -2851,7 +2860,7 @@ async function handleApi(
     }
 
     const form = await request.formData();
-    const files = form.getAll('files').filter((value) => value instanceof File);
+    let files = form.getAll('files').filter((value) => value instanceof File);
     let metadata = [];
 
     try {
@@ -2870,6 +2879,14 @@ async function handleApi(
 
     const uploadedIds = [];
     const failed = [];
+    const employeeCache = new Map();
+
+    // Anything beyond the cap is simply not processed. It is NOT reported as
+    // uploaded, so the browser keeps it in its queue for the next run.
+    const deferredCount = Math.max(0, files.length - MAX_FILES_PER_BATCH_REQUEST);
+    if (deferredCount > 0) {
+      files = files.slice(0, MAX_FILES_PER_BATCH_REQUEST);
+    }
 
     for (let index = 0; index < files.length; index += 1) {
       const item = metadata[index] || {};
@@ -2881,10 +2898,14 @@ async function handleApi(
         continue;
       }
 
-      const employee = await env.DB
-        .prepare(`SELECT * FROM employees WHERE id = ? LIMIT 1`)
-        .bind(employeeId)
-        .first();
+      let employee = employeeCache.get(employeeId);
+      if (employee === undefined) {
+        employee = await env.DB
+          .prepare(`SELECT * FROM employees WHERE id = ? LIMIT 1`)
+          .bind(employeeId)
+          .first();
+        employeeCache.set(employeeId, employee || null);
+      }
 
       if (!employee) {
         failed.push({ queueId, error: 'Employee not found.' });
@@ -2916,6 +2937,7 @@ async function handleApi(
       uploadedIds,
       uploadedCount: uploadedIds.length,
       failedCount: failed.length,
+      deferredCount,
       failed,
     }, uploadedIds.length || failed.length === 0 ? 200 : 500);
   }
