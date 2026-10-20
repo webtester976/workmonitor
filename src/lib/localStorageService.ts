@@ -50,8 +50,11 @@ const INDIA_TIME_ZONE = 'Asia/Kolkata';
 const TRACKING_START_MINUTES = 8 * 60 + 30;
 const TRACKING_END_MINUTES = 20 * 60 + 30;
 const HOURLY_UPLOAD_MS = 60 * 60 * 1000;
-const UPLOAD_BATCH_SIZE = 50;
-const MAX_BATCH_BYTES = 80 * 1024 * 1024;
+// Small batches keep every request inside Cloudflare Worker memory and
+// subrequest limits (a 50-file / 80 MB batch crashed the Worker and left the
+// whole queue stuck forever).
+const UPLOAD_BATCH_SIZE = 10;
+const MAX_BATCH_BYTES = 8 * 1024 * 1024;
 const QUEUE_DB_NAME = 'workmonitor_screenshot_queue_v2';
 const QUEUE_STORE_NAME = 'queue';
 const LAST_UPLOAD_KEY = 'workmonitor:lastScreenshotCloudUploadAt';
@@ -250,11 +253,14 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
   if (!acquireFlushLock()) return 0;
 
   let uploadedCount = 0;
+  let uploadedAnyInThisRun = false;
+  let drainedAll = true;
+  let offset = 0;
 
   try {
     const backendUrl = getBackendUrl();
 
-    for (let offset = 0; offset < items.length; ) {
+    for (; offset < items.length; ) {
       if (!isCloudUploadWindowOpen()) break;
 
       const batch: QueuedScreenshot[] = [];
@@ -282,10 +288,16 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
         formData.append('files', item.blob, item.fileName);
       });
 
-      const response = await fetch(`${backendUrl}/api/upload-screenshot-batch`, {
-        method: 'POST',
-        body: formData,
-      });
+      let response: Response;
+      try {
+        response = await fetch(`${backendUrl}/api/upload-screenshot-batch`, {
+          method: 'POST',
+          body: formData,
+        });
+      } catch (error) {
+        console.warn('Screenshot batch upload network error:', error);
+        break;
+      }
 
       let data: any = null;
       try {
@@ -294,29 +306,38 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
         data = null;
       }
 
-      if (!response.ok || !data?.success) {
+      const uploadedIds = Array.isArray(data?.uploadedIds)
+        ? data.uploadedIds.filter((id: unknown): id is string => typeof id === 'string')
+        : [];
+
+      // Always remove whatever the Worker confirmed, even on a partial failure.
+      if (uploadedIds.length) {
+        await deleteQueuedScreenshots(uploadedIds);
+        uploadedCount += uploadedIds.length;
+        uploadedAnyInThisRun = true;
+      }
+
+      // HTTP/server failure with nothing stored: stop and retry later.
+      if (!response.ok && !uploadedIds.length) {
         console.warn('Screenshot batch upload deferred:', response.status, data);
         break;
       }
 
-      const uploadedIds = Array.isArray(data.uploadedIds)
-        ? data.uploadedIds.filter((id: unknown): id is string => typeof id === 'string')
-        : [];
-
-      if (uploadedIds.length) {
-        await deleteQueuedScreenshots(uploadedIds);
-        uploadedCount += uploadedIds.length;
-      }
-
-      // If the worker reports partial failure, keep failed screenshots locally.
-      if (data.failedCount > 0) {
-        break;
+      // Partial failure: keep the failed ones in the queue but continue with
+      // the next batches so one bad item can never block everything behind it.
+      if (data?.failedCount > 0) {
+        console.warn('Some screenshots failed and stay queued:', data.failed);
       }
 
       offset += batch.length;
+      if (data?.failedCount > 0) {
+        drainedAll = false;
+      }
     }
 
-    if (uploadedCount > 0) {
+    // Only start the one-hour wait when the whole queue was uploaded.
+    // If something is left (failure / partial), the next minute-tick retries.
+    if (uploadedAnyInThisRun && drainedAll && offset >= items.length) {
       setLastUploadAt(Date.now());
     }
 
