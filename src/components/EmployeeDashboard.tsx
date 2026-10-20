@@ -162,6 +162,13 @@ const withTimeout = async <T,>(
 };
 
 // ======================================================
+// RESUME / TIMER SETTINGS
+// ======================================================
+const RESUME_MAX_GAP_SECONDS = 10 * 60; // refresh/reopen within 10 min resumes the running timer
+const RESUME_EXTRA_COUNT_SECONDS = 120; // at most 2 min of the reload gap is counted
+const MAX_TICK_GAP_SECONDS = 300; // never add more than 5 min in one tick (sleep/hibernate)
+
+// ======================================================
 // TYPES
 // ======================================================
 
@@ -272,8 +279,17 @@ export const EmployeeDashboard:
   const [
     lastCapturedTime,
     setLastCapturedTime,
-  ] =
-    useState('');
+  ] = useState('');
+
+  // True when the timer is running but the browser screen-share is not active
+  // (e.g. right after a page refresh). Browsers force a fresh click to grant
+  // screen access again, so the employee gets a one-click "Share Screen" button.
+  const [needsScreenShare, setNeedsScreenShare] = useState(false);
+
+  // Wall-clock based timer helpers (hidden tabs throttle setInterval).
+  const lastTickAtRef = useRef<number>(Date.now());
+  const hydratedRef = useRef(false);
+  const timerKeyRef = useRef('');
 
   // ====================================================
   // GLOBAL ADMIN POLICY
@@ -528,6 +544,11 @@ export const EmployeeDashboard:
 
   // Restore browser timer
   useEffect(() => {
+      // Hydration guard: the save effect must not overwrite the stored session
+      // before it has been read (also protects React StrictMode double-run).
+      window.setTimeout(() => {
+        hydratedRef.current = true;
+      }, 0);
     try {
       const raw =
         localStorage.getItem(
@@ -555,11 +576,45 @@ export const EmployeeDashboard:
         );
       }
 
-      // Do not restore a previous running session. Daily totals are loaded
-      // separately from D1 using the current IST date key; a stale browser
-      // session must never make a new day's Start continue yesterday's timer.
-      setSessionSeconds(0);
-      restoredSessionRef.current = false;
+      // Resume a running session after a page refresh (same IST day only).
+      // Screen-share permission cannot be restored by the browser, so the
+      // employee is asked to click "Share Screen" once to resume screenshots.
+      const todayKey = getTodayDateKey();
+      const savedAt = Number(saved?.updatedAt || 0);
+      const gapSec = savedAt
+        ? Math.max(0, Math.floor((Date.now() - savedAt) / 1000))
+        : Number.POSITIVE_INFINITY;
+
+      const canResume =
+        saved?.isTracking === true &&
+        saved?.trackingDate === todayKey &&
+        gapSec <= RESUME_MAX_GAP_SECONDS;
+
+      if (canResume) {
+        const wasPaused = saved.isPaused === true;
+        const extra = wasPaused ? 0 : Math.min(gapSec, RESUME_EXTRA_COUNT_SECONDS);
+        const restoredSession = Math.max(0, Number(saved.sessionSeconds) || 0) + extra;
+        const restoredDay = Math.max(0, Number(saved.dayTotalSeconds) || 0) + extra;
+
+        trackingDateRef.current = todayKey;
+        trackingRef.current = true;
+        pausedRef.current = wasPaused;
+        daySecondsRef.current = restoredDay;
+        lastTickAtRef.current = Date.now();
+        restoredSessionRef.current = true;
+
+        setDayTotalSeconds(restoredDay);
+        setSessionSeconds(restoredSession);
+        setIsTracking(true);
+        setIsPaused(wasPaused);
+        setNeedsScreenShare(true);
+        setLastStatus(
+          'Page refreshed - your timer is still running. Click "Share Screen" to resume screenshots.'
+        );
+      } else {
+        setSessionSeconds(0);
+        restoredSessionRef.current = false;
+      }
 
       if (
         saved?.taskName
@@ -582,11 +637,15 @@ export const EmployeeDashboard:
 
   // Save timer
   useEffect(() => {
+    timerKeyRef.current = timerStorageKey;
+    if (!hydratedRef.current) {
+      return;
+    }
     try {
       localStorage.setItem(
         timerStorageKey,
-
         JSON.stringify({
+          trackingDate: trackingDateRef.current,
           dayTotalSeconds,
           sessionSeconds,
           taskName,
@@ -733,9 +792,14 @@ export const EmployeeDashboard:
         throw new Error(data?.error || 'Could not load central tracker time');
       }
       const centralSeconds = Math.max(0, Math.floor(Number(data.totalSeconds) || 0));
-      daySecondsRef.current = centralSeconds;
-      setDayTotalSeconds(centralSeconds);
-      return centralSeconds;
+      // If a session is already running (e.g. restored after refresh), the
+      // local value is newer than the last 60-second sync - never go backwards.
+      const effectiveSeconds = trackingRef.current
+        ? Math.max(centralSeconds, daySecondsRef.current)
+        : centralSeconds;
+      daySecondsRef.current = effectiveSeconds;
+      setDayTotalSeconds(effectiveSeconds);
+      return effectiveSeconds;
     } catch (error) {
       console.warn('Central tracker time load warning:', error);
       return Math.max(0, daySecondsRef.current || 0);
@@ -824,24 +888,28 @@ export const EmployeeDashboard:
       isTracking &&
       !isPaused
     ) {
+      lastTickAtRef.current = Date.now();
+
+      // Wall-clock based: browsers throttle timers in background tabs to
+      // ~1 tick per minute, so counting "+1 per tick" under-counts time.
       trackerTimerRef.current =
         window.setInterval(
           () => {
-            setSessionSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
+            const now = Date.now();
+            let delta = Math.floor((now - lastTickAtRef.current) / 1000);
 
-            setDayTotalSeconds(
-              (
-                previous
-              ) =>
-                previous +
-                1
-            );
+            if (delta < 1) {
+              return;
+            }
+
+            lastTickAtRef.current += delta * 1000;
+
+            if (delta > MAX_TICK_GAP_SECONDS) {
+              delta = MAX_TICK_GAP_SECONDS;
+            }
+
+            setSessionSeconds((previous) => previous + delta);
+            setDayTotalSeconds((previous) => previous + delta);
           },
           1000
         );
@@ -1106,6 +1174,34 @@ export const EmployeeDashboard:
         throw new Error('Screen capture stream is not live.');
       }
 
+      // Preferred: grab a frame straight from the track (does not depend on a
+      // hidden <video> element, which browsers may pause in background tabs).
+      try {
+        const ImageCaptureCtor = (window as any).ImageCapture;
+        if (ImageCaptureCtor) {
+          const bitmap: ImageBitmap = await withTimeout(
+            new ImageCaptureCtor(videoTrack).grabFrame(),
+            6000,
+            'grabFrame timed out'
+          );
+          if (bitmap && bitmap.width > 0 && bitmap.height > 0) {
+            const frameScale = Math.min(1, 1920 / bitmap.width, 1080 / bitmap.height);
+            const frameCanvas = document.createElement('canvas');
+            frameCanvas.width = Math.max(1, Math.round(bitmap.width * frameScale));
+            frameCanvas.height = Math.max(1, Math.round(bitmap.height * frameScale));
+            const frameCtx = frameCanvas.getContext('2d', { alpha: false });
+            if (frameCtx) {
+              frameCtx.drawImage(bitmap, 0, 0, frameCanvas.width, frameCanvas.height);
+              bitmap.close?.();
+              return frameCanvas;
+            }
+            bitmap.close?.();
+          }
+        }
+      } catch (grabError) {
+        console.warn('grabFrame failed, using video element fallback:', grabError);
+      }
+
       if (video.srcObject !== stream) {
         video.srcObject = stream;
       }
@@ -1211,15 +1307,22 @@ export const EmployeeDashboard:
       try {
         setLastStatus('Capturing screenshot...');
 
-        const stream = await withTimeout(
-          initScreenStream(),
-          10000,
-          'Screen capture permission/stream timed out.'
-        );
+        // getDisplayMedia needs a user click; calling it from a timer always
+        // fails. If sharing is not active, ask the employee to re-share.
+        const stream =
+          screenStreamRef.current && screenStreamRef.current.active
+            ? screenStreamRef.current
+            : null;
 
         if (!stream) {
+          setNeedsScreenShare(true);
+          setLastStatus(
+            'Screen sharing is not active - click "Share Screen" to resume screenshots.'
+          );
           return;
         }
+
+        setNeedsScreenShare(false);
 
         const canvas = await withTimeout(
           captureCurrentScreen(stream),
@@ -1628,9 +1731,7 @@ export const EmployeeDashboard:
     // Focus + visibilitychange can fire together. Avoid duplicate
     // requests while still picking up admin changes quickly.
     if (
-      now -
-        capturePolicyRefreshAtRef.current <
-      5000
+      now - capturePolicyRefreshAtRef.current < 120000
     ) {
       return;
     }
@@ -1736,7 +1837,7 @@ export const EmployeeDashboard:
       if (document.visibilityState === 'visible') {
         void refreshCapturePolicy();
       }
-    }, 10000);
+    }, 5 * 60 * 1000);
 
     return () => {
       window.removeEventListener('focus', handleVisibilityOrFocus);
@@ -2355,44 +2456,43 @@ export const EmployeeDashboard:
         return;
       }
 
-      // Fetch the latest daily total from D1 before starting on this computer.
-      // This continues the same employee's total instead of starting from zero.
-      const centralTotalSeconds = await loadCentralTrackerTime();
+      // Fetch the latest daily total from D1 (max 8s - a slow backend must never
+      // block screenshots or the timer from starting).
+      const centralTotalSeconds = await withTimeout(
+        loadCentralTrackerTime(),
+        8000,
+        'Central time load timed out'
+      ).catch(() => Math.max(0, daySecondsRef.current || 0));
+
       daySecondsRef.current = centralTotalSeconds;
       setDayTotalSeconds(centralTotalSeconds);
 
       trackingDateRef.current = getTodayDateKey();
+      lastTickAtRef.current = Date.now();
 
-      trackingRef.current =
-        true;
+      trackingRef.current = true;
+      pausedRef.current = false;
 
-      pausedRef.current =
-        false;
+      setIsTracking(true);
+      setIsPaused(false);
+      setNeedsScreenShare(false);
 
-      setIsTracking(
-        true
-      );
-
-      setIsPaused(
-        false
-      );
-
-      // Every Start begins a fresh session. Today's accumulated total remains
-      // sourced from D1, but a previous session duration is never resumed.
       restoredSessionRef.current = false;
       setSessionSeconds(0);
 
-      setLastStatus(
-        '✅ Tracking started'
-      );
+      setLastStatus('✅ Tracking started');
 
-      await logTrackerEvent('start');
-      await syncTrackerTime(centralTotalSeconds);
-
+      // Start the screenshot scheduler FIRST, before any network call, so a
+      // slow/blocked Cloudflare backend can never prevent screenshots.
       scheduleRandomWindow(
         captureWindowRef.current,
         screenshotCountRef.current
       );
+
+      void (async () => {
+        await logTrackerEvent('start');
+        await syncTrackerTime(centralTotalSeconds);
+      })();
     };
 
   // ====================================================
@@ -2455,8 +2555,17 @@ export const EmployeeDashboard:
   const stopTracking =
     async () => {
 
-      await logTrackerEvent('stop');
-      await syncTrackerTime();
+      // Network calls get max 8s so the Stop button can never hang.
+      await withTimeout(
+        (async () => {
+          await logTrackerEvent('stop');
+          await syncTrackerTime();
+        })(),
+        8000,
+        'Stop sync timed out'
+      ).catch(() => undefined);
+
+      setNeedsScreenShare(false);
 
       trackingRef.current =
         false;
@@ -2518,11 +2627,49 @@ export const EmployeeDashboard:
     };
 
   // ====================================================
+  // RE-SHARE SCREEN (after refresh / lost permission)
+  // ====================================================
+
+  const reshareScreen = async () => {
+    const stream = await initScreenStream();
+
+    if (!stream) {
+      return;
+    }
+
+    setNeedsScreenShare(false);
+    setLastStatus('✅ Screen sharing resumed - screenshots are active');
+
+    if (trackingRef.current && !pausedRef.current) {
+      scheduleRandomWindow(
+        captureWindowRef.current,
+        screenshotCountRef.current
+      );
+    }
+  };
+
+  // ====================================================
   // CLEANUP
   // ====================================================
 
   useEffect(() => {
     return () => {
+
+      // Logout / leaving the dashboard ends the running session so the next
+      // login does not resume it. A plain page refresh never reaches here.
+      if (hydratedRef.current && timerKeyRef.current) {
+        try {
+          const rawSaved = localStorage.getItem(timerKeyRef.current);
+          if (rawSaved) {
+            const savedState = JSON.parse(rawSaved);
+            savedState.isTracking = false;
+            savedState.isPaused = false;
+            localStorage.setItem(timerKeyRef.current, JSON.stringify(savedState));
+          }
+        } catch {
+          // ignore
+        }
+      }
 
       clearCaptureTimers();
 
@@ -2756,6 +2903,23 @@ export const EmployeeDashboard:
           )}
 
         </div>
+
+        {/* SCREEN SHARE REQUIRED (after refresh) */}
+
+        {isTracking && needsScreenShare && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700 p-4 space-y-3 text-center">
+            <div className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+              Your timer is running, but screen sharing is off, so screenshots are not being captured.
+            </div>
+            <button
+              type="button"
+              onClick={reshareScreen}
+              className="cursor-pointer px-5 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-sm font-bold"
+            >
+              Share Screen &amp; Resume Screenshots
+            </button>
+          </div>
+        )}
 
         {/* CAPTURE COUNTDOWN */}
 
