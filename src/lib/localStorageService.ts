@@ -55,8 +55,9 @@ const HOURLY_UPLOAD_MS = 60 * 60 * 1000;
 // whole queue stuck forever).
 const UPLOAD_BATCH_SIZE = 10;
 const MAX_BATCH_BYTES = 8 * 1024 * 1024;
-const QUEUE_DB_NAME = 'workmonitor_screenshot_queue_v2';
+const QUEUE_DB_NAME = 'workmonitor_screenshot_queue_v3';
 const QUEUE_STORE_NAME = 'queue';
+const LOCAL_SCREENSHOT_STORE_NAME = 'screenshots';
 const LAST_UPLOAD_KEY = 'workmonitor:lastScreenshotCloudUploadAt';
 const FLUSH_LOCK_KEY = 'workmonitor:screenshotQueueFlushLock';
 
@@ -91,6 +92,11 @@ const getQueueDb = (): Promise<IDBDatabase | null> => {
       if (!db.objectStoreNames.contains(QUEUE_STORE_NAME)) {
         const store = db.createObjectStore(QUEUE_STORE_NAME, { keyPath: 'id' });
         store.createIndex('queuedAt', 'queuedAt', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(LOCAL_SCREENSHOT_STORE_NAME)) {
+        const store = db.createObjectStore(LOCAL_SCREENSHOT_STORE_NAME, { keyPath: 'id' });
+        store.createIndex('employeeDate', ['employeeId', 'dateKey'], { unique: false });
+        store.createIndex('fileName', 'fileName', { unique: false });
       }
     };
 
@@ -254,6 +260,19 @@ export async function uploadScreenshotLocally(
     dateKey,
     queuedAt: Date.now(),
     attempts: 0,
+  });
+
+  // Keep a permanent browser-local copy. The hourly uploader may delete the queue item
+  // after a successful cloud upload, but this copy survives page refreshes and temporary
+  // Worker/D1 failures.
+  await putLocalPersistedScreenshot({
+    id: `local-${id}`,
+    blob: imageBlob,
+    fileName,
+    employeeId,
+    employeeName,
+    dateKey,
+    capturedAt: Date.now(),
   });
 
   return {
