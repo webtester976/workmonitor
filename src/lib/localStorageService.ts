@@ -55,9 +55,29 @@ const HOURLY_UPLOAD_MS = 60 * 60 * 1000;
 // whole queue stuck forever).
 const UPLOAD_BATCH_SIZE = 10;
 const MAX_BATCH_BYTES = 8 * 1024 * 1024;
-const QUEUE_DB_NAME = 'workmonitor_screenshot_queue_v3';
+const QUEUE_DB_NAME = 'workmonitor_screenshot_queue_v4';
 const QUEUE_STORE_NAME = 'queue';
 const LOCAL_SCREENSHOT_STORE_NAME = 'screenshots';
+
+interface PersistedScreenshot {
+  id: string;
+  blob: Blob;
+  fileName: string;
+  employeeId: string;
+  employeeName: string;
+  dateKey: string;
+  capturedAt: number;
+}
+
+export interface LocalScreenshotPreview {
+  localId: string;
+  fileName: string;
+  employeeId: string;
+  employeeName: string;
+  dateKey: string;
+  capturedAt: number;
+  blob: Blob;
+}
 const LAST_UPLOAD_KEY = 'workmonitor:lastScreenshotCloudUploadAt';
 const FLUSH_LOCK_KEY = 'workmonitor:screenshotQueueFlushLock';
 
@@ -85,7 +105,7 @@ const getQueueDb = (): Promise<IDBDatabase | null> => {
   }
 
   return new Promise((resolve) => {
-    const request = indexedDB.open(QUEUE_DB_NAME, 1);
+    const request = indexedDB.open(QUEUE_DB_NAME, 2);
 
     request.onupgradeneeded = () => {
       const db = request.result;
@@ -140,6 +160,57 @@ const putQueuedScreenshot = async (item: QueuedScreenshot): Promise<void> => {
       tx.onabort = () => reject(tx.error || new Error('Unable to save screenshot locally.'));
     } catch (error) {
       reject(error);
+    }
+  });
+};
+
+const putLocalPersistedScreenshot = async (item: PersistedScreenshot): Promise<void> => {
+  const db = await getQueueDb();
+  if (!db) throw new Error('Browser local storage is unavailable.');
+
+  await new Promise<void>((resolve, reject) => {
+    try {
+      const tx = db.transaction(LOCAL_SCREENSHOT_STORE_NAME, 'readwrite');
+      tx.objectStore(LOCAL_SCREENSHOT_STORE_NAME).put(item);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('Unable to save permanent local screenshot.'));
+      tx.onabort = () => reject(tx.error || new Error('Unable to save permanent local screenshot.'));
+    } catch (error) {
+      reject(error);
+    }
+  });
+};
+
+export async function getLocalScreenshotPreviews(
+  employeeId: string,
+  dateKey: string
+): Promise<LocalScreenshotPreview[]> {
+  const db = await getQueueDb();
+  if (!db) return [];
+
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(LOCAL_SCREENSHOT_STORE_NAME, 'readonly');
+      const store = tx.objectStore(LOCAL_SCREENSHOT_STORE_NAME);
+      const request = store.index('employeeDate').getAll([employeeId, dateKey]);
+      request.onsuccess = () => {
+        const items = Array.isArray(request.result)
+          ? (request.result as PersistedScreenshot[])
+          : [];
+        items.sort((a, b) => b.capturedAt - a.capturedAt);
+        resolve(items.map((item) => ({
+          localId: item.id,
+          fileName: item.fileName,
+          employeeId: item.employeeId,
+          employeeName: item.employeeName,
+          dateKey: item.dateKey,
+          capturedAt: item.capturedAt,
+          blob: item.blob,
+        })));
+      };
+      request.onerror = () => resolve([]);
+    } catch {
+      resolve([]);
     }
   });
 };
