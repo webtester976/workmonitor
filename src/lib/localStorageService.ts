@@ -99,12 +99,20 @@ const isCloudUploadWindowOpen = (date = new Date()): boolean => {
   return minutes >= TRACKING_START_MINUTES && minutes <= TRACKING_END_MINUTES;
 };
 
+// One shared connection. Opening a new IDBDatabase handle on every call (and
+// never closing it) leaks connections during a long working day.
+let queueDbPromise: Promise<IDBDatabase | null> | null = null;
+
 const getQueueDb = (): Promise<IDBDatabase | null> => {
   if (typeof window === 'undefined' || !window.indexedDB) {
     return Promise.resolve(null);
   }
 
-  return new Promise((resolve) => {
+  if (queueDbPromise) {
+    return queueDbPromise;
+  }
+
+  queueDbPromise = new Promise((resolve) => {
     const request = indexedDB.open(QUEUE_DB_NAME, 2);
 
     request.onupgradeneeded = () => {
@@ -120,9 +128,25 @@ const getQueueDb = (): Promise<IDBDatabase | null> => {
       }
     };
 
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => resolve(null);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => {
+        db.close();
+        queueDbPromise = null;
+      };
+      db.onclose = () => {
+        queueDbPromise = null;
+      };
+      resolve(db);
+    };
+
+    request.onerror = () => {
+      queueDbPromise = null;
+      resolve(null);
+    };
   });
+
+  return queueDbPromise;
 };
 
 const getQueuedScreenshots = async (): Promise<QueuedScreenshot[]> => {
@@ -263,6 +287,43 @@ export async function getQueuedScreenshotPreviews(
     }));
 }
 
+// Permanent browser copies are only a convenience for the employee's own
+// history. Remove old ones so the browser storage quota never fills up and
+// blocks new screenshots.
+const LOCAL_COPY_KEEP_MS = 3 * 24 * 60 * 60 * 1000;
+
+export async function pruneOldLocalScreenshots(keepMs = LOCAL_COPY_KEEP_MS): Promise<number> {
+  const db = await getQueueDb();
+  if (!db) return 0;
+
+  return new Promise((resolve) => {
+    try {
+      const cutoff = Date.now() - keepMs;
+      let removed = 0;
+      const tx = db.transaction(LOCAL_SCREENSHOT_STORE_NAME, 'readwrite');
+      const store = tx.objectStore(LOCAL_SCREENSHOT_STORE_NAME);
+      const cursorRequest = store.openCursor();
+
+      cursorRequest.onsuccess = () => {
+        const cursor = cursorRequest.result;
+        if (!cursor) return;
+        const value = cursor.value as PersistedScreenshot;
+        if (Number(value?.capturedAt || 0) < cutoff) {
+          cursor.delete();
+          removed += 1;
+        }
+        cursor.continue();
+      };
+
+      tx.oncomplete = () => resolve(removed);
+      tx.onerror = () => resolve(removed);
+      tx.onabort = () => resolve(removed);
+    } catch {
+      resolve(0);
+    }
+  });
+}
+
 const getLastUploadAt = (): number => {
   if (typeof window === 'undefined') return 0;
   return Number(window.localStorage.getItem(LAST_UPLOAD_KEY) || 0) || 0;
@@ -322,7 +383,7 @@ export async function uploadScreenshotLocally(
 ): Promise<LocalStorageResult> {
   const id = `queue-${Date.now()}-${crypto.randomUUID()}`;
 
-  await putQueuedScreenshot({
+  const queueItem: QueuedScreenshot = {
     id,
     blob: imageBlob,
     fileName,
@@ -331,20 +392,34 @@ export async function uploadScreenshotLocally(
     dateKey,
     queuedAt: Date.now(),
     attempts: 0,
-  });
+  };
 
-  // Keep a permanent browser-local copy. The hourly uploader may delete the queue item
-  // after a successful cloud upload, but this copy survives page refreshes and temporary
-  // Worker/D1 failures.
-  await putLocalPersistedScreenshot({
-    id: `local-${id}`,
-    blob: imageBlob,
-    fileName,
-    employeeId,
-    employeeName,
-    dateKey,
-    capturedAt: Date.now(),
-  });
+  try {
+    await putQueuedScreenshot(queueItem);
+  } catch (error) {
+    // Most likely the browser storage quota is full: free space and retry once.
+    console.warn('Queue save failed, pruning old local copies and retrying:', error);
+    await pruneOldLocalScreenshots(24 * 60 * 60 * 1000);
+    await putQueuedScreenshot(queueItem);
+  }
+
+  // Optional permanent browser copy (used for the employee's own history).
+  // It must NEVER make the capture fail - the queued copy above is what gets
+  // uploaded to the cloud.
+  try {
+    await putLocalPersistedScreenshot({
+      id: `local-${id}`,
+      blob: imageBlob,
+      fileName,
+      employeeId,
+      employeeName,
+      dateKey,
+      capturedAt: Date.now(),
+    });
+  } catch (error) {
+    console.warn('Permanent local copy skipped:', error);
+    void pruneOldLocalScreenshots();
+  }
 
   return {
     fileId: `local-queue:${id}`,
@@ -483,6 +558,7 @@ export function startScreenshotUploadScheduler(): () => void {
 
   // Check once when the dashboard starts, then every minute so the queue
   // uploads as soon as its hourly slot and the 08:30–20:30 IST window allow it.
+  void pruneOldLocalScreenshots();
   void tick();
   const timer = window.setInterval(() => void tick(), 60 * 1000);
 
