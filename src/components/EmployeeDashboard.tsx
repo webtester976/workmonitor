@@ -36,6 +36,7 @@ import {
 
 import {
   getLocalScreenshots,
+  getQueuedScreenshotPreviews,
   startScreenshotUploadScheduler,
   uploadScreenshotLocally,
 } from '../lib/localStorageService';
@@ -1858,11 +1859,16 @@ export const EmployeeDashboard:
         }
 
         // Central files
+        // If the cloud list cannot be loaded (offline / Worker error) we still
+        // want to show the screenshots saved on this computer.
         const files =
           await getLocalScreenshots(
             currentUser.id,
             selectedDate
-          );
+          ).catch((error) => {
+            console.warn('Cloud screenshot list warning:', error);
+            return [];
+          });
 
         const restored:
           ScreenshotLog[] =
@@ -1975,6 +1981,53 @@ export const EmployeeDashboard:
               };
             }
           );
+
+        // Screenshots captured on this computer that are still waiting for the
+        // hourly cloud upload live only in IndexedDB. Restore them too, so a
+        // page refresh does not make them disappear from the list.
+        try {
+          const queued =
+            await getQueuedScreenshotPreviews(
+              currentUser.id,
+              selectedDate
+            );
+
+          queued.forEach((item) => {
+            const m = item.fileName.match(
+              /Screen_(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})\.(webp|png|jpg|jpeg)$/i
+            );
+
+            const when = m
+              ? new Date(`${m[1]}T${m[2]}:${m[3]}:${m[4]}`)
+              : new Date(item.queuedAt);
+
+            const ext = item.fileName.toLowerCase().endsWith('.png')
+              ? 'png'
+              : /\.jpe?g$/i.test(item.fileName)
+                ? 'jpg'
+                : 'webp';
+
+            restored.push({
+              id: `queued-${item.queueId}`,
+              userId: currentUser.id,
+              userName: currentUser.name,
+              userEmail: currentUser.email,
+              taskName: 'Saved on this computer (upload pending)',
+              timestamp: when.toISOString(),
+              timeFormatted: formatTimeString(when),
+              hourKey: getHourSlotKey(when),
+              dateKey: selectedDate,
+              fileFormat: ext,
+              // Same id format as a fresh capture, so the merge step
+              // de-duplicates it against the in-memory copy.
+              driveFileId: `local-queue:${item.queueId}`,
+              driveThumbnailLink: '',
+              previewDataUrl: URL.createObjectURL(item.blob),
+            } as ScreenshotLog);
+          });
+        } catch (error) {
+          console.warn('Queued screenshot restore warning:', error);
+        }
 
         restored.sort(
           (
