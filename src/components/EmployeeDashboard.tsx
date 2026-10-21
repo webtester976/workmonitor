@@ -464,6 +464,16 @@ export const EmployeeDashboard:
   const capturePolicyRefreshAtRef =
     useRef(0);
 
+  // The focus/visibility listener is registered only once, so it must compare
+  // against refs (always current) and NOT against state captured in a stale
+  // closure. Otherwise every refresh looks like a "policy change" and the
+  // screenshot schedule gets reset again and again.
+  const capturePresetRef =
+    useRef(capturePresetId);
+
+  const centralPolicyUpdatedAtRef =
+    useRef(centralPolicyUpdatedAt);
+
   const screenshotCountRef =
     useRef(
       screenshotsPerWindow
@@ -1776,11 +1786,12 @@ export const EmployeeDashboard:
         settings.updatedAt || ''
       );
 
-      const changed =
+      const scheduleChanged =
         newWindow !== captureWindowRef.current ||
-        newCount !== screenshotCountRef.current ||
-        newPreset !== capturePresetId ||
-        newUpdatedAt !== centralPolicyUpdatedAt;
+        newCount !== screenshotCountRef.current;
+
+      capturePresetRef.current = newPreset;
+      centralPolicyUpdatedAtRef.current = newUpdatedAt;
 
       setCaptureWindowSeconds(newWindow);
       setScreenshotsPerWindow(newCount);
@@ -1791,7 +1802,7 @@ export const EmployeeDashboard:
       screenshotCountRef.current = newCount;
 
       if (
-        changed &&
+        scheduleChanged &&
         trackingRef.current &&
         !pausedRef.current
       ) {
