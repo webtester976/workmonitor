@@ -113,6 +113,9 @@ const TRACKER_EVENT_TABLE_SQL = `
   )
 `;
 
+// Cache table setup per warm Worker isolate; do not issue CREATE TABLE on every event.
+let trackerEventTableReady = false;
+
 function safeFileName(
   value,
   fallback = `Screen_${Date.now()}.webp`
@@ -1558,7 +1561,10 @@ async function handleApi(
     ).bind(employeeId).first();
     if (!employee) return json({ success: false, error: 'Employee not found.' }, 404);
 
-    await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
+    if (!trackerEventTableReady) {
+      await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
+      trackerEventTableReady = true;
+    }
     const eventAt = new Date().toISOString();
     const dateKey = indiaDateKey(new Date(eventAt));
     const eventId = crypto.randomUUID();
@@ -2923,23 +2929,27 @@ async function handleApi(
         );
         uploadedIds.push(queueId);
       } catch (error) {
-        console.error('Screenshot batch item upload failed:', {
-          queueId,
-          employeeId,
-          message: error?.message || String(error),
-        });
-        failed.push({ queueId, error: error?.message || 'Screenshot upload failed.' });
+        const rawMessage = String(error?.message || error || 'Screenshot upload failed.');
+        const quotaExceeded = /KV put\(\) limit exceeded|daily.*write.*limit|write.*limit.*exceeded/i.test(rawMessage);
+        const safeMessage = quotaExceeded
+          ? 'Cloudflare KV daily write limit is exhausted. Screenshot remains queued on this employee device and can upload after the daily quota resets.'
+          : rawMessage;
+        console.error('Screenshot batch item upload failed:', { queueId, employeeId, message: safeMessage });
+        failed.push({ queueId, error: safeMessage, quotaExceeded });
       }
     }
 
+    const kvQuotaExceeded = failed.length > 0 && failed.every((item) => item.quotaExceeded);
     return json({
       success: uploadedIds.length > 0 || failed.length === 0,
       uploadedIds,
       uploadedCount: uploadedIds.length,
       failedCount: failed.length,
       deferredCount,
+      quotaExceeded: kvQuotaExceeded,
+      retryAfterUtc: kvQuotaExceeded ? '00:00 UTC (daily quota reset; 05:30 IST)' : null,
       failed,
-    }, uploadedIds.length || failed.length === 0 ? 200 : 500);
+    }, uploadedIds.length || failed.length === 0 ? 200 : (kvQuotaExceeded ? 429 : 500));
   }
 
 
