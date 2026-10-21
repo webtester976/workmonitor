@@ -79,6 +79,7 @@ export interface LocalScreenshotPreview {
   blob: Blob;
 }
 const LAST_UPLOAD_KEY = 'workmonitor:lastScreenshotCloudUploadAt';
+const KV_QUOTA_RETRY_AFTER_KEY = 'workmonitor:kvQuotaRetryAfter';
 const FLUSH_LOCK_KEY = 'workmonitor:screenshotQueueFlushLock';
 
 const getIndiaMinutes = (date = new Date()): number => {
@@ -431,6 +432,12 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
   if (typeof window === 'undefined') return 0;
   if (!isCloudUploadWindowOpen()) return 0;
 
+  // Stop repeated Worker/D1 requests after Cloudflare reports the daily KV quota is exhausted.
+  // Queue items remain in IndexedDB and retry after the next midnight UTC reset (05:30 IST).
+  const quotaRetryAfter = Number(window.localStorage.getItem(KV_QUOTA_RETRY_AFTER_KEY) || 0);
+  if (quotaRetryAfter > Date.now()) return 0;
+  if (quotaRetryAfter) window.localStorage.removeItem(KV_QUOTA_RETRY_AFTER_KEY);
+
   const items = await getQueuedScreenshots();
   const now = Date.now();
 
@@ -494,6 +501,17 @@ export async function flushScreenshotUploadQueue(): Promise<number> {
       const uploadedIds = Array.isArray(data?.uploadedIds)
         ? data.uploadedIds.filter((id: unknown): id is string => typeof id === 'string')
         : [];
+
+      const failedText = Array.isArray(data?.failed)
+        ? data.failed.map((item: any) => String(item?.error || '')).join(' ')
+        : '';
+      const quotaExceeded = Boolean(data?.quotaExceeded) || /KV put\(\) limit exceeded|daily write limit is exhausted/i.test(failedText);
+      if (quotaExceeded) {
+        const now = new Date();
+        const nextUtcMidnight = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1, 0, 0, 0, 0);
+        window.localStorage.setItem(KV_QUOTA_RETRY_AFTER_KEY, String(nextUtcMidnight));
+        console.warn('Cloudflare KV daily write quota exhausted. Queue retained; retry after 00:00 UTC / 05:30 IST.');
+      }
 
       // Always remove whatever the Worker confirmed, even on a partial failure.
       if (uploadedIds.length) {
