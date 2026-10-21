@@ -324,26 +324,17 @@ export async function pruneOldLocalScreenshots(keepMs = LOCAL_COPY_KEEP_MS): Pro
   });
 }
 
-const getLastUploadAt = (): number => {
-  if (typeof window === 'undefined') return 0;
-  return Number(window.localStorage.getItem(LAST_UPLOAD_KEY) || 0) || 0;
-};
-
 const setLastUploadAt = (timestamp: number): void => {
   if (typeof window === 'undefined') return;
   window.localStorage.setItem(LAST_UPLOAD_KEY, String(timestamp));
 };
 
+// A batch is due once the OLDEST queued screenshot has waited one full hour.
+// (Previously this was measured from the last upload. That made the first
+// screenshot of a session upload alone after a minute - resetting the clock -
+// and then every later screenshot waited a full hour, so Admin saw just 1.)
 const canStartHourlyFlush = (items: QueuedScreenshot[], now: number): boolean => {
   if (!items.length) return false;
-
-  const lastUploadAt = getLastUploadAt();
-  if (lastUploadAt > 0) {
-    return now - lastUploadAt >= HOURLY_UPLOAD_MS;
-  }
-
-  // First cloud batch is also delayed until the oldest queued screenshot
-  // has been waiting for one hour.
   return now - items[0].queuedAt >= HOURLY_UPLOAD_MS;
 };
 
