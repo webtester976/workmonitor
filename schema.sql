@@ -59,3 +59,30 @@ VALUES (
   1,
   datetime('now')
 );
+
+-- ======================================================
+-- Indexes that keep D1 "rows read" low (safe to run many times)
+-- ======================================================
+CREATE TABLE IF NOT EXISTS screenshot_index (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL,
+  employee_name TEXT,
+  email TEXT,
+  date_key TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  storage_key TEXT NOT NULL UNIQUE,
+  content_type TEXT NOT NULL DEFAULT 'image/webp',
+  uploaded_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_screenshot_index_employee_date ON screenshot_index (employee_id, date_key);
+CREATE INDEX IF NOT EXISTS idx_screenshot_index_uploaded ON screenshot_index (uploaded_at, id);
+
+CREATE TABLE IF NOT EXISTS tracker_events (
+  id TEXT PRIMARY KEY,
+  employee_id TEXT NOT NULL,
+  employee_name TEXT,
+  event_type TEXT NOT NULL,
+  event_at TEXT NOT NULL,
+  date_key TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tracker_events_employee_date ON tracker_events (employee_id, date_key);
