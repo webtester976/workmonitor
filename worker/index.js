@@ -113,8 +113,28 @@ const TRACKER_EVENT_TABLE_SQL = `
   )
 `;
 
+// Index so "uploaded after X" queries (used by local-sync) read only the NEW rows
+// instead of scanning the whole screenshot_index table.
+const SCREENSHOT_UPLOADED_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_screenshot_index_uploaded
+  ON screenshot_index (uploaded_at, id)
+`;
+
+// Without this index every "events for employee + date" query scans the WHOLE table.
+const TRACKER_EVENT_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS idx_tracker_events_employee_date
+  ON tracker_events (employee_id, date_key)
+`;
+
 // Cache table setup per warm Worker isolate; do not issue CREATE TABLE on every event.
 let trackerEventTableReady = false;
+
+async function ensureTrackerEventTable(env) {
+  if (trackerEventTableReady) return;
+  await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
+  await env.DB.prepare(TRACKER_EVENT_INDEX_SQL).run();
+  trackerEventTableReady = true;
+}
 
 function safeFileName(
   value,
@@ -162,12 +182,16 @@ let screenshotIndexReady = false;
 // Hard cap per request so a batch can never exceed Worker memory/subrequest limits.
 const MAX_FILES_PER_BATCH_REQUEST = 12;
 
+async function ensureScreenshotIndex(env) {
+  if (screenshotIndexReady) return;
+  await env.DB.prepare(SCREENSHOT_INDEX_TABLE_SQL).run();
+  await env.DB.prepare(SCREENSHOT_INDEX_INDEX_SQL).run();
+  await env.DB.prepare(SCREENSHOT_UPLOADED_INDEX_SQL).run();
+  screenshotIndexReady = true;
+}
+
 async function storeScreenshot(env, employee, file, requestedFileName, requestedDateKey, origin) {
-  if (!screenshotIndexReady) {
-    await env.DB.prepare(SCREENSHOT_INDEX_TABLE_SQL).run();
-    await env.DB.prepare(SCREENSHOT_INDEX_INDEX_SQL).run();
-    screenshotIndexReady = true;
-  }
+  await ensureScreenshotIndex(env);
   const dateKey = isDateKey(requestedDateKey) ? requestedDateKey : todayKey();
   const fileName = safeFileName(requestedFileName || file.name, `Screen_${Date.now()}.webp`);
   const uniqueId = crypto.randomUUID();
@@ -1561,10 +1585,7 @@ async function handleApi(
     ).bind(employeeId).first();
     if (!employee) return json({ success: false, error: 'Employee not found.' }, 404);
 
-    if (!trackerEventTableReady) {
-      await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
-      trackerEventTableReady = true;
-    }
+    await ensureTrackerEventTable(env);
     const eventAt = new Date().toISOString();
     const dateKey = indiaDateKey(new Date(eventAt));
     const eventId = crypto.randomUUID();
@@ -2332,8 +2353,6 @@ async function handleApi(
     const summaries =
       [];
 
-    await env.DB.prepare(TRACKER_EVENT_TABLE_SQL).run();
-
     for (
       const employee of
       employeesResult.results
@@ -2380,19 +2399,6 @@ async function handleApi(
           today
         );
 
-
-      const eventResult = await env.DB.prepare(`
-        SELECT id, event_type, event_at, date_key
-        FROM tracker_events
-        WHERE employee_id = ? AND date_key = ?
-        ORDER BY event_at ASC
-      `).bind(employee.id, today).all();
-      const trackerEvents = (eventResult.results || []).map((event) => ({
-        id: event.id,
-        eventType: event.event_type,
-        eventAt: event.event_at,
-        dateKey: event.date_key,
-      }));
 
       summaries.push({
         employeeId:
@@ -2950,6 +2956,64 @@ async function handleApi(
       retryAfterUtc: kvQuotaExceeded ? '00:00 UTC (daily quota reset; 05:30 IST)' : null,
       failed,
     }, uploadedIds.length || failed.length === 0 ? 200 : (kvQuotaExceeded ? 429 : 500));
+  }
+
+
+  // ====================================================
+  // SYNC FEED - used by local-sync.js
+  // Returns ONLY screenshots uploaded after the given cursor.
+  // D1 rows read per call = rows returned (0 when nothing is new),
+  // instead of re-listing every screenshot of every employee.
+  // ====================================================
+
+  if (
+    method === 'GET' &&
+    pathname === '/api/sync/screenshots'
+  ) {
+    await ensureScreenshotIndex(env);
+
+    const sinceRaw = String(url.searchParams.get('since') || '');
+    const since = /^\d{4}-\d{2}-\d{2}T[\d:.]+Z$/.test(sinceRaw)
+      ? sinceRaw
+      : '1970-01-01T00:00:00.000Z';
+    const afterId = String(url.searchParams.get('afterId') || '');
+    const limit = Math.min(
+      Math.max(Number(url.searchParams.get('limit')) || 200, 1),
+      500
+    );
+
+    const result = await env.DB
+      .prepare(`
+        SELECT
+          id, employee_id, employee_name, email,
+          date_key, file_name, storage_key, uploaded_at
+        FROM screenshot_index
+        WHERE uploaded_at >= ?1
+          AND (uploaded_at > ?1 OR id > ?2)
+        ORDER BY uploaded_at ASC, id ASC
+        LIMIT ?3
+      `)
+      .bind(since, afterId, limit + 1)
+      .all();
+
+    const rows = result.results || [];
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+
+    return json({
+      success: true,
+      hasMore,
+      items: page.map((row) => ({
+        id: row.id,
+        employeeId: row.employee_id,
+        employeeName: row.employee_name || '',
+        email: row.email || '',
+        dateKey: row.date_key,
+        fileName: row.file_name,
+        uploadedAt: row.uploaded_at,
+        localUrl: `${url.origin}/api/screenshot-file?key=${encodeURIComponent(row.storage_key)}`,
+      })),
+    });
   }
 
 
