@@ -182,12 +182,141 @@ let screenshotIndexReady = false;
 // Hard cap per request so a batch can never exceed Worker memory/subrequest limits.
 const MAX_FILES_PER_BATCH_REQUEST = 12;
 
+// Changes whenever this file changes. Open /api/version to confirm which
+// Worker code is really live.
+const BUILD_ID = '2026-10-23-bundle-1';
+
+const UPLOAD_ERRORS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS upload_errors (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    at TEXT NOT NULL,
+    employee_id TEXT,
+    message TEXT,
+    failed_count INTEGER,
+    uploaded_count INTEGER
+  )
+`;
+
 async function ensureScreenshotIndex(env) {
   if (screenshotIndexReady) return;
   await env.DB.prepare(SCREENSHOT_INDEX_TABLE_SQL).run();
   await env.DB.prepare(SCREENSHOT_INDEX_INDEX_SQL).run();
   await env.DB.prepare(SCREENSHOT_UPLOADED_INDEX_SQL).run();
+  await env.DB.prepare(UPLOAD_ERRORS_TABLE_SQL).run();
+
+  // Bundle columns: several screenshots of one upload batch share ONE KV
+  // object (1 KV write per batch instead of 1 per screenshot).
+  const info = await env.DB.prepare(`PRAGMA table_info(screenshot_index)`).all();
+  const columns = new Set((info.results || []).map((row) => row.name));
+  for (const [name, type] of [
+    ['bundle_key', 'TEXT'],
+    ['bundle_offset', 'INTEGER'],
+    ['bundle_length', 'INTEGER'],
+  ]) {
+    if (columns.has(name)) continue;
+    try {
+      await env.DB.prepare(`ALTER TABLE screenshot_index ADD COLUMN ${name} ${type}`).run();
+    } catch (error) {
+      if (!/duplicate column/i.test(String(error?.message || error))) throw error;
+    }
+  }
+
   screenshotIndexReady = true;
+}
+
+async function logUploadError(env, employeeIds, message, failedCount, uploadedCount) {
+  try {
+    await env.DB.prepare(`
+      INSERT INTO upload_errors (at, employee_id, message, failed_count, uploaded_count)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(
+      new Date().toISOString(),
+      [...new Set(employeeIds)].join(',').slice(0, 200),
+      String(message || '').slice(0, 400),
+      failedCount,
+      uploadedCount
+    ).run();
+    // Keep the table small.
+    await env.DB.prepare(`DELETE FROM upload_errors WHERE at < ?`)
+      .bind(new Date(Date.now() - 3 * 24 * 60 * 60 * 1000).toISOString())
+      .run();
+  } catch (error) {
+    console.error('Could not log upload error:', error);
+  }
+}
+
+// Stores all screenshots of one upload batch as ONE KV object and indexes
+// every screenshot in D1 with its byte range inside that object.
+async function storeScreenshotBundle(env, entries) {
+  await ensureScreenshotIndex(env);
+
+  const uploadedAt = new Date().toISOString();
+  const prepared = [];
+  const buffers = [];
+  let totalBytes = 0;
+
+  for (const entry of entries) {
+    const buffer = await entry.file.arrayBuffer();
+    const dateKey = isDateKey(entry.requestedDateKey) ? entry.requestedDateKey : todayKey();
+    const fileName = safeFileName(entry.requestedFileName || entry.file.name, `Screen_${Date.now()}.webp`);
+    const storageKey = `shot:${entry.employee.id}:${dateKey}:${Date.now()}:${crypto.randomUUID()}:${fileName}`;
+
+    prepared.push({
+      employee: entry.employee,
+      dateKey,
+      fileName,
+      storageKey,
+      contentType: entry.file.type || 'image/webp',
+      offset: totalBytes,
+      length: buffer.byteLength,
+    });
+    buffers.push(buffer);
+    totalBytes += buffer.byteLength;
+  }
+
+  const bundle = new Uint8Array(totalBytes);
+  let position = 0;
+  for (const buffer of buffers) {
+    bundle.set(new Uint8Array(buffer), position);
+    position += buffer.byteLength;
+  }
+
+  const bundleKey = `bundle:${Date.now()}:${crypto.randomUUID()}`;
+  await env.SCREENSHOTS.put(bundleKey, bundle, {
+    metadata: { bundle: true, count: prepared.length, uploadedAt },
+  });
+
+  try {
+    await env.DB.batch(
+      prepared.map((item) =>
+        env.DB.prepare(`
+          INSERT INTO screenshot_index (
+            id, employee_id, employee_name, email, date_key,
+            file_name, storage_key, content_type, uploaded_at,
+            bundle_key, bundle_offset, bundle_length
+          )
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(storage_key) DO NOTHING
+        `).bind(
+          item.storageKey,
+          item.employee.id,
+          item.employee.name,
+          item.employee.email,
+          item.dateKey,
+          item.fileName,
+          item.storageKey,
+          item.contentType,
+          uploadedAt,
+          bundleKey,
+          item.offset,
+          item.length
+        )
+      )
+    );
+  } catch (error) {
+    await env.SCREENSHOTS.delete(bundleKey).catch(() => {});
+    throw error;
+  }
 }
 
 async function storeScreenshot(env, employee, file, requestedFileName, requestedDateKey, origin) {
@@ -2891,6 +3020,7 @@ async function handleApi(
 
     const uploadedIds = [];
     const failed = [];
+    const pending = [];
     const employeeCache = new Map();
 
     // Anything beyond the cap is simply not processed. It is NOT reported as
@@ -2924,25 +3054,40 @@ async function handleApi(
         continue;
       }
 
+      pending.push({
+        queueId,
+        employee,
+        file: files[index],
+        requestedFileName: String(item.fileName || files[index].name || ''),
+        requestedDateKey: String(item.dateKey || ''),
+      });
+    }
+
+    if (pending.length > 0) {
       try {
-        await storeScreenshot(
-          env,
-          employee,
-          files[index],
-          String(item.fileName || files[index].name || ''),
-          String(item.dateKey || ''),
-          url.origin
-        );
-        uploadedIds.push(queueId);
+        await storeScreenshotBundle(env, pending);
+        for (const entry of pending) uploadedIds.push(entry.queueId);
       } catch (error) {
         const rawMessage = String(error?.message || error || 'Screenshot upload failed.');
-        const quotaExceeded = /KV put\(\) limit exceeded|daily.*write.*limit|write.*limit.*exceeded/i.test(rawMessage);
+        const quotaExceeded = /KV put\(\) limit exceeded|daily.*write.*limit|write.*limit.*exceeded|limit exceeded/i.test(rawMessage);
         const safeMessage = quotaExceeded
           ? 'Cloudflare KV daily write limit is exhausted. Screenshot remains queued on this employee device and can upload after the daily quota resets.'
           : rawMessage;
-        console.error('Screenshot batch item upload failed:', { queueId, employeeId, message: safeMessage });
-        failed.push({ queueId, error: safeMessage, quotaExceeded });
+        console.error('Screenshot batch upload failed:', safeMessage);
+        for (const entry of pending) {
+          failed.push({ queueId: entry.queueId, error: safeMessage, quotaExceeded });
+        }
       }
+    }
+
+    if (failed.length > 0) {
+      await logUploadError(
+        env,
+        metadata.map((item) => String(item?.employeeId || '')),
+        failed[0]?.error || 'Screenshot upload failed.',
+        failed.length,
+        uploadedIds.length
+      );
     }
 
     const kvQuotaExceeded = failed.length > 0 && failed.every((item) => item.quotaExceeded);
@@ -2956,6 +3101,51 @@ async function handleApi(
       retryAfterUtc: kvQuotaExceeded ? '00:00 UTC (daily quota reset; 05:30 IST)' : null,
       failed,
     }, uploadedIds.length || failed.length === 0 ? 200 : (kvQuotaExceeded ? 429 : 500));
+  }
+
+
+  // ====================================================
+  // VERSION + UPLOAD DIAGNOSTICS (open in a browser)
+  // ====================================================
+
+  if (method === 'GET' && pathname === '/api/version') {
+    return json({ success: true, build: BUILD_ID });
+  }
+
+  if (method === 'GET' && pathname === '/api/upload-diagnostics') {
+    await ensureScreenshotIndex(env);
+
+    const todayStart = new Date(`${todayKey()}T00:00:00+05:30`).toISOString();
+
+    const perEmployee = await env.DB
+      .prepare(`
+        SELECT employee_id, employee_name,
+               COUNT(*) AS screenshots_today,
+               MAX(uploaded_at) AS last_upload_utc
+        FROM screenshot_index
+        WHERE uploaded_at >= ?
+        GROUP BY employee_id
+      `)
+      .bind(todayStart)
+      .all();
+
+    const errors = await env.DB
+      .prepare(`
+        SELECT at, employee_id, message, failed_count, uploaded_count
+        FROM upload_errors
+        ORDER BY id DESC
+        LIMIT 20
+      `)
+      .all();
+
+    return json({
+      success: true,
+      build: BUILD_ID,
+      nowUtc: new Date().toISOString(),
+      todayIst: todayKey(),
+      uploadedToday: perEmployee.results || [],
+      recentUploadErrors: errors.results || [],
+    });
   }
 
 
@@ -3061,8 +3251,36 @@ async function handleApi(
           'arrayBuffer'
         );
 
+    let body = result.value;
+    let contentType = result.metadata?.contentType || 'image/webp';
 
-    if (!result.value) {
+    // Screenshots uploaded in a batch live inside one shared KV object.
+    if (!body) {
+      const row = await env.DB
+        .prepare(`
+          SELECT bundle_key, bundle_offset, bundle_length, content_type
+          FROM screenshot_index
+          WHERE storage_key = ?
+          LIMIT 1
+        `)
+        .bind(key)
+        .first()
+        .catch(() => null);
+
+      if (row?.bundle_key) {
+        const bundle = await env.SCREENSHOTS.get(row.bundle_key, {
+          type: 'arrayBuffer',
+          cacheTtl: 3600,
+        });
+        if (bundle) {
+          const start = Number(row.bundle_offset || 0);
+          body = bundle.slice(start, start + Number(row.bundle_length || 0));
+          contentType = row.content_type || contentType;
+        }
+      }
+    }
+
+    if (!body) {
       return new Response(
         'Screenshot not found.',
         {
@@ -3071,20 +3289,17 @@ async function handleApi(
       );
     }
 
-
     return new Response(
-      result.value,
+      body,
       {
         status: 200,
 
         headers: {
-          'Content-Type':
-            result.metadata
-              ?.contentType ||
-            'image/webp',
+          'Content-Type': contentType,
 
+          // Screenshots never change, so let the browser keep them.
           'Cache-Control':
-            'private, max-age=300',
+            'private, max-age=86400',
 
           'Access-Control-Allow-Origin':
             '*',
