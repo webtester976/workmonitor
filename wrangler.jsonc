@@ -18,6 +18,9 @@
 			"database_id": "ecffd220-5f6d-4c07-a7c1-81d6765d57d1"
 		}
 	],
+	"triggers": {
+		"crons": ["0 16-23 * * *"]
+	},
 	"kv_namespaces": [
 		{
 			"binding": "SCREENSHOTS",
