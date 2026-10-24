@@ -184,7 +184,7 @@ const MAX_FILES_PER_BATCH_REQUEST = 12;
 
 // Changes whenever this file changes. Open /api/version to confirm which
 // Worker code is really live.
-const BUILD_ID = '2026-10-24-bundle-2-cleanup';
+const BUILD_ID = '2026-10-24-bundle-3-keep10d';
 
 const UPLOAD_ERRORS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS upload_errors (
@@ -238,7 +238,7 @@ async function ensureScreenshotIndex(env) {
 // Runs from the cron trigger in wrangler.jsonc (night time, IST).
 // ======================================================
 
-const DEFAULT_RETENTION_DAYS = 7;
+const DEFAULT_RETENTION_DAYS = 10;
 const PURGE_KV_DELETES_PER_RUN = 100; // 8 runs/night = 800 < 1000 free deletes/day
 
 async function purgeOldScreenshots(env) {
