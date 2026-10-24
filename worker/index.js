@@ -184,7 +184,7 @@ const MAX_FILES_PER_BATCH_REQUEST = 12;
 
 // Changes whenever this file changes. Open /api/version to confirm which
 // Worker code is really live.
-const BUILD_ID = '2026-10-23-bundle-1';
+const BUILD_ID = '2026-10-24-bundle-2-cleanup';
 
 const UPLOAD_ERRORS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS upload_errors (
@@ -212,6 +212,7 @@ async function ensureScreenshotIndex(env) {
     ['bundle_key', 'TEXT'],
     ['bundle_offset', 'INTEGER'],
     ['bundle_length', 'INTEGER'],
+    ['purged_at', 'TEXT'],
   ]) {
     if (columns.has(name)) continue;
     try {
@@ -221,7 +222,86 @@ async function ensureScreenshotIndex(env) {
     }
   }
 
+  await env.DB.prepare(`
+    CREATE INDEX IF NOT EXISTS idx_screenshot_purge
+    ON screenshot_index (purged_at, date_key)
+  `).run();
+
   screenshotIndexReady = true;
+}
+
+// ======================================================
+// CLEANUP: keeps Cloudflare KV from filling up.
+// Screenshots older than RETENTION_DAYS are removed from KV (the copies on the
+// admin PC D: drive stay forever). The index rows stay, so history/counts
+// still show; only the old image itself is gone from the cloud.
+// Runs from the cron trigger in wrangler.jsonc (night time, IST).
+// ======================================================
+
+const DEFAULT_RETENTION_DAYS = 7;
+const PURGE_KV_DELETES_PER_RUN = 100; // 8 runs/night = 800 < 1000 free deletes/day
+
+async function purgeOldScreenshots(env) {
+  await ensureScreenshotIndex(env);
+
+  const retentionDays = Math.max(
+    2,
+    Number(env.RETENTION_DAYS) || DEFAULT_RETENTION_DAYS
+  );
+  const cutoffDate = new Date(
+    Date.now() + 5.5 * 60 * 60 * 1000 - retentionDays * 24 * 60 * 60 * 1000
+  ).toISOString().slice(0, 10);
+
+  const result = await env.DB
+    .prepare(`
+      SELECT id, storage_key, bundle_key
+      FROM screenshot_index
+      WHERE purged_at IS NULL AND date_key < ?
+      ORDER BY date_key ASC
+      LIMIT 1500
+    `)
+    .bind(cutoffDate)
+    .all();
+
+  const rows = result.results || [];
+  if (rows.length === 0) return { deleted: 0, rows: 0, cutoffDate };
+
+  // One KV object per bundle, or one per old single-file screenshot.
+  const keyToRowIds = new Map();
+  for (const row of rows) {
+    const kvKey = row.bundle_key || row.storage_key;
+    if (!keyToRowIds.has(kvKey)) {
+      if (keyToRowIds.size >= PURGE_KV_DELETES_PER_RUN) continue;
+      keyToRowIds.set(kvKey, []);
+    }
+    keyToRowIds.get(kvKey).push(row.id);
+  }
+
+  const purgedAt = new Date().toISOString();
+  const rowIds = [];
+  let deleted = 0;
+
+  for (const [kvKey, ids] of keyToRowIds) {
+    try {
+      await env.SCREENSHOTS.delete(kvKey);
+      deleted += 1;
+      rowIds.push(...ids);
+    } catch (error) {
+      console.error('Purge: KV delete failed (probably daily delete limit):', error);
+      break;
+    }
+  }
+
+  for (let i = 0; i < rowIds.length; i += 90) {
+    await env.DB.batch(
+      rowIds.slice(i, i + 90).map((id) =>
+        env.DB.prepare(`UPDATE screenshot_index SET purged_at = ? WHERE id = ?`)
+          .bind(purgedAt, id)
+      )
+    );
+  }
+
+  return { deleted, rows: rowIds.length, cutoffDate };
 }
 
 async function logUploadError(env, employeeIds, message, failedCount, uploadedCount) {
@@ -3546,6 +3626,14 @@ async function handleApi(
 // ====================================================
 
 export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(
+      purgeOldScreenshots(env)
+        .then((info) => console.log('Purge finished:', JSON.stringify(info)))
+        .catch((error) => console.error('Purge failed:', error))
+    );
+  },
+
   async fetch(
     request,
     env
