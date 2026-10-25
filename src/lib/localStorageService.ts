@@ -330,13 +330,28 @@ const setLastUploadAt = (timestamp: number): void => {
   window.localStorage.setItem(LAST_UPLOAD_KEY, String(timestamp));
 };
 
-// A batch is due once the OLDEST queued screenshot has waited one full hour.
-// (Previously this was measured from the last upload. That made the first
-// screenshot of a session upload alone after a minute - resetting the clock -
-// and then every later screenshot waited a full hour, so Admin saw just 1.)
+// Uploads follow the CLOCK, not a rolling hour:
+//   screenshots captured 09:00-09:59 are uploaded right after 10:00,
+//   10:00-10:59 right after 11:00, and so on (all employees at the same time).
+// An employee who starts at 09:30 uploads at 10:00 as well.
+// Whatever is queued at that moment goes in the same run, in batches of
+// UPLOAD_BATCH_SIZE (one Cloudflare write per batch, not per screenshot).
+// Before the 08:30-20:30 IST window closes, the last partial hour is also sent.
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+const END_OF_DAY_FLUSH_MINUTES_BEFORE_CLOSE = 5;
+
+const getIstHourSlot = (timestampMs: number): number =>
+  Math.floor((timestampMs + IST_OFFSET_MS) / HOURLY_UPLOAD_MS);
+
 const canStartHourlyFlush = (items: QueuedScreenshot[], now: number): boolean => {
   if (!items.length) return false;
-  return now - items[0].queuedAt >= HOURLY_UPLOAD_MS;
+
+  // The oldest queued screenshot belongs to an hour that has already ended.
+  if (getIstHourSlot(items[0].queuedAt) < getIstHourSlot(now)) return true;
+
+  // Last minutes of the cloud window: send the final partial hour too.
+  const minutes = getIndiaMinutes(new Date(now));
+  return minutes >= TRACKING_END_MINUTES - END_OF_DAY_FLUSH_MINUTES_BEFORE_CLOSE;
 };
 
 const acquireFlushLock = (): boolean => {
